@@ -55,6 +55,7 @@
 #include "citron/custom_metadata_dialog.h"
 #include "citron/game_list.h"
 #include "citron/game_list_p.h"
+#include "citron/game_list_delegate.h"
 #include "citron/game_list_worker.h"
 #include "citron/main.h"
 #include "citron/uisettings.h"
@@ -923,7 +924,7 @@ GameList::GameList(std::shared_ptr<FileSys::VfsFilesystem> vfs_,
     tree_view->setModel(item_model);
     list_view->setModel(item_model);
 
-    tree_view->setAlternatingRowColors(true);
+    tree_view->setAlternatingRowColors(false);
     tree_view->setSelectionMode(QHeaderView::SingleSelection);
     tree_view->setSelectionBehavior(QHeaderView::SelectRows);
     tree_view->setVerticalScrollMode(QHeaderView::ScrollPerPixel);
@@ -932,6 +933,7 @@ GameList::GameList(std::shared_ptr<FileSys::VfsFilesystem> vfs_,
     tree_view->setEditTriggers(QHeaderView::NoEditTriggers);
     tree_view->setContextMenuPolicy(Qt::CustomContextMenu);
     tree_view->setStyleSheet(QStringLiteral("QTreeView{ border: none; }"));
+    tree_view->setItemDelegate(new GameListDelegate(tree_view, this));
 
     list_view->setViewMode(QListView::IconMode);
     list_view->setResizeMode(QListView::Adjust);
@@ -1096,6 +1098,7 @@ GameList::GameList(std::shared_ptr<FileSys::VfsFilesystem> vfs_,
         QFont font = tree_view->font();
         font.setPointSize(qBound(8, value / 8, 24));
         tree_view->setFont(font);
+        tree_view->doItemsLayout(); // Force redraw and size recalculation
 
 #ifndef __linux__
         // On non-Linux platforms, also update game icon size and repaint grid view
@@ -2875,23 +2878,59 @@ void GameList::UpdateAccentColorStyles() {
                                                     .arg(hover_background_color.blue())
                                                     .arg(hover_background_color.alpha());
 
+    const bool dark = UISettings::IsDarkTheme();
+    const QString header_bg = dark ? QStringLiteral("#222226") : QStringLiteral("#dddde2");
+    const QString header_fg = dark ? QStringLiteral("#9898a4") : QStringLiteral("#444450");
+    const QString header_border = dark ? QStringLiteral("#30303a") : QStringLiteral("#c8c8d0");
+    const QString header_bg_hov = dark ? QStringLiteral("#2a2a30") : QStringLiteral("#cdcdd4");
+    const QString header_fg_hov = dark ? QStringLiteral("#d0d0e0") : QStringLiteral("#222230");
+
     QString accent_style =
         QStringLiteral(
             /* Tree View (List View) Selection & Hover Style */
+            "QTreeView {"
+            "    background-color: transparent;"
+            "    background: transparent;"
+            "    show-decoration-selected: 0;"
+            "    outline: 0;"
+            "    selection-background-color: transparent;"
+            "    selection-color: inherit;"
+            "}"
+            "QTreeView::viewport {"
+            "    background: transparent;"
+            "    background-color: transparent;"
+            "}"
+            "QTreeView::item {"
+            "    padding: 0px;"
+            "    border: none;"
+            "    background: transparent;"
+            "}"
             "QTreeView::item:hover {"
-            "    background-color: %3;" /* Use the new accent-based hover color */
-            "    border-radius: 4px;"   /* Add a subtle rounding to the hover effect */
+            "    background-color: transparent;" 
             "}"
             "QTreeView::item:selected {"
-            "    background-color: %2;" /* Use the accent-based selection color */
-            "    color: palette(text);"
-            "    border: none;"       /* NO BORDER */
-            "    border-radius: 4px;" /* Keep rounding consistent */
+            "    background-color: transparent;" 
+            "    outline: 0;"
             "}"
             "QTreeView::item:selected:!active {"
-            "    background-color: palette(light);" /* Use a muted color when window is not focused
-                                                     */
-            "    border: none;"                     /* NO BORDER */
+            "    background-color: transparent;"
+            "    outline: 0;"
+            "}"
+
+            /* Modern Header Style */
+            "QHeaderView::section, QHeaderView::section:pressed {"
+            "    background-color: %2;"
+            "    color: %3;"
+            "    border: none;"
+            "    border-bottom: 1px solid %4;"
+            "    border-right: 1px solid %4;"
+            "    padding: 6px 10px;"
+            "    font-weight: bold;"
+            "    font-size: 9pt;"
+            "}"
+            "QHeaderView::section:hover {"
+            "    background-color: %5;"
+            "    color: %6;"
             "}"
 
             /* List View (Grid View) Selection Style */
@@ -2918,10 +2957,15 @@ void GameList::UpdateAccentColorStyles() {
             "    border-radius: 5px;"
             "    border: 1px solid black;"
             "}")
-            .arg(color_name, selection_background_color_name, hover_background_color_name);
+            .arg(color_name)        // %1
+            .arg(header_bg)         // %2
+            .arg(header_fg)         // %3
+            .arg(header_border)     // %4
+            .arg(header_bg_hov)     // %5
+            .arg(header_fg_hov);    // %6
 
     // Apply the combined base styles and new accent styles to each view
-    tree_view->setStyleSheet(QStringLiteral("QTreeView{ border: none; }") + accent_style);
+    tree_view->setStyleSheet(accent_style);
     list_view->setStyleSheet(
         QStringLiteral("QListView{ border: none; background: transparent; } QListView::item { "
                        "text-align: center; padding: 5px; }") +
