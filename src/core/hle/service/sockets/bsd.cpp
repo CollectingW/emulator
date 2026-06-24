@@ -1063,10 +1063,6 @@ std::pair<s32, Errno> BSD::RecvFromImpl(s32 fd, u32 flags, std::vector<u8>& mess
         addr.clear();
         return {-1, Errno::AGAIN};
     }
-    if (!descriptor.is_connection_based) {
-        addr.clear();
-        return {-1, Errno::AGAIN};
-    }
 
     Network::SockAddrIn addr_in{};
     Network::SockAddrIn* p_addr_in = nullptr;
@@ -1074,6 +1070,8 @@ std::pair<s32, Errno> BSD::RecvFromImpl(s32 fd, u32 flags, std::vector<u8>& mess
         // Connection based file descriptors (e.g. TCP) zero addr
         addr.clear();
     } else {
+        // Datagram (UDP): receive the sender's address. (Previously this path returned
+        // AGAIN unconditionally, which silently broke all UDP recvfrom/MSG_PEEK.)
         p_addr_in = &addr_in;
     }
 

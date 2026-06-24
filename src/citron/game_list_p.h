@@ -33,6 +33,7 @@ enum class GameListItemType {
     SysNandDir = QStandardItem::UserType + 5,
     AddDir = QStandardItem::UserType + 6,
     Favorites = QStandardItem::UserType + 7,
+    HomebrewDir = QStandardItem::UserType + 8,  // NZP: Homebrew .nro files from SDMC/switch
 };
 
 Q_DECLARE_METATYPE(GameListItemType);
@@ -358,6 +359,11 @@ public:
             set_icon(QStringLiteral("chip"));
             setData(QObject::tr("System Titles"), Qt::DisplayRole);
             setData(QObject::tr("System Titles"), FullPathRole);
+            break;
+        case GameListItemType::HomebrewDir:
+            set_icon(QStringLiteral("applications-games"));  // Homebrew icon
+            setData(QObject::tr("Homebrew"), Qt::DisplayRole);
+            setData(QObject::tr("Homebrew"), FullPathRole);
             break;
         case GameListItemType::CustomDir: {
             const QString path = QString::fromStdString(game_dir->path);

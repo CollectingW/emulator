@@ -103,7 +103,22 @@ if (CITRON_USE_EXTERNAL_SDL2 AND NOT TARGET SDL2::SDL2 AND NOT TARGET SDL2-stati
         set(SDL_FILE ON)
     endif()
 
+    # libusb backend is required for the Switch 2 Joy-Con / Pro driver (SDL_hidapi_switch2.c
+    # is gated behind HAVE_LIBUSB). Force it on so those controllers are recognized.
+    set(SDL_HIDAPI ON CACHE BOOL "" FORCE)
+    set(SDL_HIDAPI_LIBUSB ON CACHE BOOL "" FORCE)
+
     add_subdirectory(SDL)
+    if (TARGET SDL3-shared)
+        target_include_directories(SDL3-shared INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/SDL_compat")
+        add_library(SDL2::SDL2 ALIAS SDL3-shared)
+    elseif (TARGET SDL3-static)
+        target_include_directories(SDL3-static INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/SDL_compat")
+        add_library(SDL2::SDL2 ALIAS SDL3-static)
+    elseif (TARGET SDL3)
+        target_include_directories(SDL3 INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/SDL_compat")
+        add_library(SDL2::SDL2 ALIAS SDL3)
+    endif()
 endif()
 
 # ENet
