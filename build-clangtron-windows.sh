@@ -705,7 +705,6 @@ stage_setup() {
             mingw-w64-clang-x86_64-ninja \
             mingw-w64-clang-x86_64-python \
             mingw-w64-clang-x86_64-boost \
-            mingw-w64-clang-x86_64-SDL2 \
             mingw-w64-clang-x86_64-nasm \
             mingw-w64-clang-x86_64-yasm \
             mingw-w64-clang-x86_64-glslang \

@@ -82,13 +82,14 @@ if (ENABLE_LIBUSB AND NOT TARGET libusb::usb)
     add_subdirectory(libusb)
 endif()
 
-# SDL2
-if (CITRON_USE_EXTERNAL_SDL2 AND NOT TARGET SDL2::SDL2 AND NOT TARGET SDL2-static)
+# SDL3 (submodule — externals/SDL points to SDL 3.x)
+# The SDL_compat/ shim re-exports SDL3 under the legacy SDL.h include path so
+# sources using `#include <SDL.h>` continue to compile against SDL3 headers.
+if (CITRON_USE_EXTERNAL_SDL2 AND NOT TARGET SDL2::SDL2 AND NOT TARGET SDL3::SDL3)
     if (NOT WIN32)
         # Citron itself needs: Atomic Audio Events Joystick Haptic Sensor Threads Timers
-        # Since 2.0.18 Atomic+Threads required for HIDAPI/libusb (see https://github.com/libsdl-org/SDL/issues/5095)
-        # Citron-cmd also needs: Video (depends on Loadso/Dlopen)
-        # CPUinfo also required for SDL Audio, at least until 2.28.0 (see https://github.com/libsdl-org/SDL/issues/7809)
+        # SDL3 handles subsystem dependencies automatically; disable unused ones to
+        # keep build times down.
         set(SDL_UNUSED_SUBSYSTEMS
             File Filesystem
             Locale Power Render)
@@ -112,13 +113,19 @@ if (CITRON_USE_EXTERNAL_SDL2 AND NOT TARGET SDL2::SDL2 AND NOT TARGET SDL2-stati
     if (TARGET SDL3-shared)
         target_include_directories(SDL3-shared INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/SDL_compat")
         add_library(SDL2::SDL2 ALIAS SDL3-shared)
+        add_library(SDL3::SDL3 ALIAS SDL3-shared)
     elseif (TARGET SDL3-static)
         target_include_directories(SDL3-static INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/SDL_compat")
         add_library(SDL2::SDL2 ALIAS SDL3-static)
+        add_library(SDL3::SDL3 ALIAS SDL3-static)
     elseif (TARGET SDL3)
         target_include_directories(SDL3 INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/SDL_compat")
         add_library(SDL2::SDL2 ALIAS SDL3)
+        add_library(SDL3::SDL3 ALIAS SDL3)
     endif()
+elseif (CITRON_USE_EXTERNAL_SDL2 AND TARGET SDL3::SDL3 AND NOT TARGET SDL2::SDL2)
+    # System SDL3 is present (e.g. installed via sdl3 Arch package) — create the compat alias.
+    add_library(SDL2::SDL2 ALIAS SDL3::SDL3)
 endif()
 
 # ENet
