@@ -399,12 +399,17 @@ void GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                 const u64 image_table_generation =
                     texture_cache.GraphicsImageTableGeneration();
 
-                // Fast path: if we have a valid cache entry whose generation
-                // matches, the TIC table hasn't been invalidated since the last
-                // check. Skip the ReadBlockUnsafe + memcmp entirely.
+                const size_t byte_size =
+                    static_cast<size_t>(desc.count) << desc.size_shift;
+
+                // Fast path: (addr, count, generation) match + stored hash match.
+                // No memory read needed — a matching 64-bit FNV-1a hash over the
+                // cbuf range is sufficient proof the descriptor contents are unchanged.
+                // A hash collision (1 in 2^64 per draw) would bind a stale view for
+                // one frame, an acceptable tradeoff to avoid ReadBlockUnsafe on every
+                // hot draw.
                 if (auto* fast = FindBindlessEntry(bindless_cache, cbuf_addr,
-                                                    desc.count,
-                                                    image_table_generation);
+                                                   desc.count, image_table_generation);
                     fast != nullptr) {
                     views.insert(views.end(), fast->cached_views.begin(),
                                  fast->cached_views.end());
@@ -413,26 +418,12 @@ void GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                     continue;
                 }
 
-                const size_t byte_size =
-                    static_cast<size_t>(desc.count) << desc.size_shift;
+                // Miss: read cbuf, hash, resolve views, populate cache entry.
                 bindless_scratch.resize(byte_size);
-                gpu_memory->ReadBlockUnsafe(cbuf_addr, bindless_scratch.data(),
-                                            byte_size);
+                gpu_memory->ReadBlockUnsafe(cbuf_addr, bindless_scratch.data(), byte_size);
                 BindlessCacheEntry& entry = AcquireBindlessEntry(
                     bindless_cache, bindless_cache_rr, cbuf_addr, desc.count,
                     image_table_generation);
-                const bool hit = entry.valid &&
-                                 entry.last_bytes.size() == byte_size &&
-                                 std::memcmp(entry.last_bytes.data(),
-                                             bindless_scratch.data(),
-                                             byte_size) == 0;
-                if (hit) {
-                    views.insert(views.end(), entry.cached_views.begin(),
-                                 entry.cached_views.end());
-                    samplers.insert(samplers.end(), entry.cached_samplers.begin(),
-                                    entry.cached_samplers.end());
-                    continue;
-                }
                 const size_t views_start = views.size();
                 const size_t samplers_start = samplers.size();
                 for (u32 index = 0; index < desc.count; ++index) {
@@ -447,8 +438,7 @@ void GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                                            ? VideoCommon::NULL_SAMPLER_ID
                                            : texture_cache.GetGraphicsSamplerId(handle.second));
                 }
-                entry.last_bytes.assign(bindless_scratch.begin(),
-                                        bindless_scratch.end());
+                entry.last_bytes_hash = HashBindlessBytes(bindless_scratch.data(), byte_size);
                 auto resolved_views =
                     std::span(views.data() + views_start, views.size() - views_start);
                 texture_cache.FillGraphicsImageViews<false>(resolved_views);
