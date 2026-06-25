@@ -402,12 +402,10 @@ void GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                 const size_t byte_size =
                     static_cast<size_t>(desc.count) << desc.size_shift;
 
-                // Fast path: (addr, count, generation) match + stored hash match.
-                // No memory read needed — a matching 64-bit FNV-1a hash over the
-                // cbuf range is sufficient proof the descriptor contents are unchanged.
-                // A hash collision (1 in 2^64 per draw) would bind a stale view for
-                // one frame, an acceptable tradeoff to avoid ReadBlockUnsafe on every
-                // hot draw.
+                // Fast path: (addr, count, image_table_generation) match.
+                // image_table_generation increments on every TIC table invalidation,
+                // so a generation hit implies the cached views are still valid.
+                // No ReadBlockUnsafe needed.
                 if (auto* fast = FindBindlessEntry(bindless_cache, cbuf_addr,
                                                    desc.count, image_table_generation);
                     fast != nullptr) {
@@ -438,7 +436,6 @@ void GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                                            ? VideoCommon::NULL_SAMPLER_ID
                                            : texture_cache.GetGraphicsSamplerId(handle.second));
                 }
-                entry.last_bytes_hash = HashBindlessBytes(bindless_scratch.data(), byte_size);
                 auto resolved_views =
                     std::span(views.data() + views_start, views.size() - views_start);
                 texture_cache.FillGraphicsImageViews<false>(resolved_views);

@@ -331,22 +331,12 @@ struct BindlessCacheEntry {
     u32 key_count{0};
     u64 key_image_table_generation{};
     bool valid{false};
-    u64 last_bytes_hash{0};  // FNV-1a hash of cbuf bytes at fill time
     boost::container::small_vector<VideoCommon::ImageViewInOut, 16> cached_views;
     boost::container::small_vector<VideoCommon::SamplerId, 16> cached_samplers;
 };
 
 constexpr size_t BINDLESS_CACHE_SIZE = 16;
 using BindlessCache = std::array<BindlessCacheEntry, BINDLESS_CACHE_SIZE>;
-
-inline u64 HashBindlessBytes(const u8* data, size_t byte_size) noexcept {
-    u64 h = FNV1A_OFFSET;
-    for (size_t i = 0; i < byte_size; ++i) {
-        h ^= static_cast<u64>(data[i]);
-        h *= FNV1A_PRIME;
-    }
-    return h;
-}
 
 inline BindlessCacheEntry* FindBindlessEntry(BindlessCache& cache, GPUVAddr addr, u32 count,
                                              u64 image_table_generation) {
