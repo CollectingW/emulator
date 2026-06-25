@@ -336,7 +336,7 @@ struct BindlessCacheEntry {
     boost::container::small_vector<VideoCommon::SamplerId, 16> cached_samplers;
 };
 
-constexpr size_t BINDLESS_CACHE_SIZE = 64;
+constexpr size_t BINDLESS_CACHE_SIZE = 16;
 using BindlessCache = std::array<BindlessCacheEntry, BINDLESS_CACHE_SIZE>;
 
 inline u64 HashBindlessBytes(const u8* data, size_t byte_size) noexcept {
