@@ -157,6 +157,13 @@
            </widget>
           </item>
           <item>
+           <widget class="QPushButton" name="button_open_external_content">
+            <property name="text">
+             <string>Open</string>
+            </property>
+           </widget>
+          </item>
+          <item>
            <spacer name="horizontalSpacer_ExternalContent">
             <property name="orientation">
              <enum>Qt::Horizontal</enum>

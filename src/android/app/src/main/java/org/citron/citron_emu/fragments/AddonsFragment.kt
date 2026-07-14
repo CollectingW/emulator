@@ -20,6 +20,7 @@ import androidx.navigation.fragment.navArgs
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.google.android.material.transition.MaterialSharedAxis
 import kotlinx.coroutines.launch
+import org.citron.citron_emu.NativeLibrary
 import org.citron.citron_emu.R
 import org.citron.citron_emu.adapters.AddonAdapter
 import org.citron.citron_emu.databinding.FragmentAddonsBinding
@@ -27,6 +28,7 @@ import org.citron.citron_emu.model.AddonViewModel
 import org.citron.citron_emu.model.HomeViewModel
 import org.citron.citron_emu.utils.AddonUtil
 import org.citron.citron_emu.utils.FileUtil.copyFilesTo
+import org.citron.citron_emu.utils.NativeConfig
 import org.citron.citron_emu.utils.ViewUtils.updateMargins
 import org.citron.citron_emu.utils.collect
 import java.io.File
@@ -160,7 +162,8 @@ class AddonsFragment : Fragment() {
                     R.string.installing_game_content,
                     false
                 ) { progressCallback, _ ->
-                    val parentDirectoryName = externalAddonDirectory.name
+                    val parentDirectoryName =
+                        externalAddonDirectory.name ?: return@newInstance errorMessage
                     val internalAddonDirectory =
                         File(args.game.addonDir + parentDirectoryName)
                     try {
@@ -168,6 +171,8 @@ class AddonsFragment : Fragment() {
                     } catch (_: Exception) {
                         return@newInstance errorMessage
                     }
+                    NativeLibrary.disableCheatsForAddon(args.game.programId, parentDirectoryName)
+                    NativeConfig.saveGlobalConfig()
                     addonViewModel.refreshAddons()
                     return@newInstance getString(R.string.addon_installed_successfully)
                 }.show(parentFragmentManager, ProgressDialogFragment.TAG)

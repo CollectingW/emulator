@@ -176,7 +176,6 @@ signals:
     void ShowList(bool show);
     void PopulatingCompleted();
     void SaveConfig();
-    void RunAutoloaderRequested();
 
 public slots:
     void OnConfigurationChanged();

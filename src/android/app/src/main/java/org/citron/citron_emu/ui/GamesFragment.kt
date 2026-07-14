@@ -146,7 +146,7 @@ class GamesFragment : Fragment() {
             val rightInsets = barInsets.right + cutoutInsets.right
             val left: Int
             val right: Int
-            if (ViewCompat.getLayoutDirection(view) == ViewCompat.LAYOUT_DIRECTION_LTR) {
+            if (view.layoutDirection == View.LAYOUT_DIRECTION_LTR) {
                 left = leftInsets + spacingNavigationRail
                 right = rightInsets
             } else {

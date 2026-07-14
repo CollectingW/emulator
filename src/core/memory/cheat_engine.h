@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
+#include <mutex>
 #include <vector>
 #include "common/common_types.h"
 #include "core/memory/dmnt_cheat_types.h"
@@ -69,6 +70,8 @@ public:
     void Initialize();
     void SetMainMemoryParameters(VAddr main_region_begin, u64 main_region_size);
 
+    [[nodiscard]] const std::array<u8, 0x20>& GetBuildId() const;
+
     void Reload(std::vector<CheatEntry> reload_cheats);
 
 private:
@@ -78,6 +81,7 @@ private:
     CheatProcessMetadata metadata;
 
     std::vector<CheatEntry> cheats;
+    std::mutex cheats_mutex;
     std::atomic_bool is_pending_reload{false};
 
     std::shared_ptr<Core::Timing::EventType> event;

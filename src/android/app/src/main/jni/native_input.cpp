@@ -1,6 +1,12 @@
 // SPDX-FileCopyrightText: 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <limits>
+#include <mutex>
+#include <span>
+#include <time.h>
+
 #include <common/fs/fs.h>
 #include <common/fs/path_util.h>
 #include <common/settings.h>
@@ -19,6 +25,95 @@
 #include "native.h"
 
 std::unordered_map<std::string, std::unique_ptr<AndroidConfig>> map_profiles;
+
+namespace {
+
+struct AndroidInputTimingStats {
+    u64 samples{};
+    u64 total_ns{};
+    u64 min_ns{std::numeric_limits<u64>::max()};
+    u64 max_ns{};
+    u64 total_units{};
+};
+
+AndroidInputTimingStats button_timing_stats;
+AndroidInputTimingStats axis_timing_stats;
+std::mutex input_timing_mutex;
+
+u64 GetMonotonicClockNs() {
+    timespec time{};
+    clock_gettime(CLOCK_MONOTONIC, &time);
+    return static_cast<u64>(time.tv_sec) * 1'000'000'000ULL + static_cast<u64>(time.tv_nsec);
+}
+
+void RecordAndroidInputTiming(const char* path, AndroidInputTimingStats& stats,
+                              jlong dispatch_start_ns, size_t units) {
+    if (dispatch_start_ns <= 0) {
+        return;
+    }
+
+    const u64 now_ns = GetMonotonicClockNs();
+    const u64 start_ns = static_cast<u64>(dispatch_start_ns);
+    if (now_ns < start_ns) {
+        return;
+    }
+
+    const u64 elapsed_ns = now_ns - start_ns;
+    std::scoped_lock lock{input_timing_mutex};
+    stats.samples++;
+    stats.total_ns += elapsed_ns;
+    stats.min_ns = std::min(stats.min_ns, elapsed_ns);
+    stats.max_ns = std::max(stats.max_ns, elapsed_ns);
+    stats.total_units += units;
+
+    if (stats.samples % 120 != 0) {
+        return;
+    }
+
+    const double avg_us = static_cast<double>(stats.total_ns) / stats.samples / 1000.0;
+    const double min_us = static_cast<double>(stats.min_ns) / 1000.0;
+    const double max_us = static_cast<double>(stats.max_ns) / 1000.0;
+    const double last_us = static_cast<double>(elapsed_ns) / 1000.0;
+    const double avg_units = static_cast<double>(stats.total_units) / stats.samples;
+    LOG_WARNING(Input,
+                "[Android Input Timing] {} samples={} avg={:.2f}us min={:.2f}us max={:.2f}us "
+                "last={:.2f}us avg_units={:.2f}",
+                path, stats.samples, avg_us, min_us, max_us, last_us, avg_units);
+}
+
+size_t SetAndroidAxesByPort(JNIEnv* env, jint j_port, jintArray j_axes, jfloatArray j_values,
+                            jint j_count) {
+    if (j_port < 0 || j_axes == nullptr || j_values == nullptr || j_count <= 0) {
+        return 0;
+    }
+
+    const jsize axes_length = env->GetArrayLength(j_axes);
+    const jsize values_length = env->GetArrayLength(j_values);
+    if (axes_length <= 0 || values_length <= 0) {
+        return 0;
+    }
+
+    jboolean axes_is_copy{false};
+    jboolean values_is_copy{false};
+    jint* axes = env->GetIntArrayElements(j_axes, &axes_is_copy);
+    jfloat* values = env->GetFloatArrayElements(j_values, &values_is_copy);
+    size_t count{};
+    if (axes != nullptr && values != nullptr) {
+        count = static_cast<size_t>(std::min({axes_length, values_length, j_count}));
+        EmulationSession::GetInstance().GetInputSubsystem().GetAndroid()->SetAxisPositions(
+            static_cast<size_t>(j_port), std::span<const int>{axes, count},
+            std::span<const float>{values, count});
+    }
+    if (axes != nullptr) {
+        env->ReleaseIntArrayElements(j_axes, axes, JNI_ABORT);
+    }
+    if (values != nullptr) {
+        env->ReleaseFloatArrayElements(j_values, values, JNI_ABORT);
+    }
+    return count;
+}
+
+} // Anonymous namespace
 
 bool IsHandheldOnly() {
     const auto npad_style_set =
@@ -196,10 +291,47 @@ void Java_org_citron_citron_1emu_features_input_NativeInput_onGamePadButtonEvent
         Common::Android::GetJString(env, j_guid), j_port, j_button_id, j_action != 0);
 }
 
+void Java_org_citron_citron_1emu_features_input_NativeInput_onGamePadButtonEventByPort(
+    JNIEnv* env, jobject j_obj, jint j_port, jint j_button_id, jint j_action) {
+    if (j_port < 0) {
+        return;
+    }
+
+    EmulationSession::GetInstance().GetInputSubsystem().GetAndroid()->SetButtonState(
+        static_cast<size_t>(j_port), j_button_id, j_action != 0);
+}
+
+void Java_org_citron_citron_1emu_features_input_NativeInput_onGamePadButtonEventByPortTimed(
+    JNIEnv* env, jobject j_obj, jint j_port, jint j_button_id, jint j_action,
+    jlong j_dispatch_start_ns) {
+    if (j_port < 0) {
+        return;
+    }
+
+    EmulationSession::GetInstance().GetInputSubsystem().GetAndroid()->SetButtonState(
+        static_cast<size_t>(j_port), j_button_id, j_action != 0);
+    RecordAndroidInputTiming("button", button_timing_stats, j_dispatch_start_ns, 1);
+}
+
 void Java_org_citron_citron_1emu_features_input_NativeInput_onGamePadAxisEvent(
     JNIEnv* env, jobject j_obj, jstring j_guid, jint j_port, jint j_stick_id, jfloat j_value) {
     EmulationSession::GetInstance().GetInputSubsystem().GetAndroid()->SetAxisPosition(
         Common::Android::GetJString(env, j_guid), j_port, j_stick_id, j_value);
+}
+
+void Java_org_citron_citron_1emu_features_input_NativeInput_onGamePadAxisEventByPort(
+    JNIEnv* env, jobject j_obj, jint j_port, jintArray j_axes, jfloatArray j_values,
+    jint j_count) {
+    SetAndroidAxesByPort(env, j_port, j_axes, j_values, j_count);
+}
+
+void Java_org_citron_citron_1emu_features_input_NativeInput_onGamePadAxisEventByPortTimed(
+    JNIEnv* env, jobject j_obj, jint j_port, jintArray j_axes, jfloatArray j_values, jint j_count,
+    jlong j_dispatch_start_ns) {
+    const size_t count = SetAndroidAxesByPort(env, j_port, j_axes, j_values, j_count);
+    if (count > 0) {
+        RecordAndroidInputTiming("axis", axis_timing_stats, j_dispatch_start_ns, count);
+    }
 }
 
 void Java_org_citron_citron_1emu_features_input_NativeInput_onGamePadMotionEvent(
@@ -286,6 +418,11 @@ void Java_org_citron_citron_1emu_features_input_NativeInput_registerController(J
                                                                            jobject j_obj,
                                                                            jobject j_device) {
     EmulationSession::GetInstance().GetInputSubsystem().GetAndroid()->RegisterController(j_device);
+}
+
+void Java_org_citron_citron_1emu_features_input_NativeInput_clearRegisteredControllers(
+    JNIEnv* env, jobject j_obj) {
+    EmulationSession::GetInstance().GetInputSubsystem().GetAndroid()->ClearControllers();
 }
 
 jobjectArray Java_org_citron_citron_1emu_features_input_NativeInput_getInputDevices(JNIEnv* env,

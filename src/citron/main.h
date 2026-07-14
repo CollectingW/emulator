@@ -273,7 +273,6 @@ private:
     void LinkActionShortcut(QAction* action, const QString& action_name,
                             const bool tas_allowed = false);
     void RegisterMetaTypes();
-    void RegisterAutoloaderContents();
     void InitializeWidgets();
     void InitializeDebugWidgets();
     void InitializeRecentFileMenuActions();
@@ -316,7 +315,6 @@ private:
     Service::AM::FrontendAppletParameters SystemAppletParameters(u64 program_id,
                                                                  Service::AM::AppletId applet_id);
     void SetupHomeMenuCallback();
-    std::unique_ptr<FileSys::ManualContentProvider> autoloader_provider;
     u64 current_title_id{0};
 private slots:
     void OnStartGame();
@@ -350,8 +348,6 @@ private slots:
     void OnMenuLoadFolder();
     void OnMenuInstallToNAND();
     void OnMenuTrimXCI();
-    void OnMenuInstallWithUpdateManager();
-    void OnRunAutoloaderFromGameList();
     void OnMenuRecentFile();
     void OnConfigure();
     void OnConfigureTas();

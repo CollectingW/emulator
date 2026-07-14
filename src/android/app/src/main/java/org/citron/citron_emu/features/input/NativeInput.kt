@@ -55,6 +55,22 @@ object NativeInput {
     )
 
     /**
+     * Lower-overhead gameplay path for already registered Android controllers.
+     * Uses the stable controller port instead of sending the GUID string through JNI per event.
+     */
+    external fun onGamePadButtonEventByPort(port: Int, buttonId: Int, action: Int)
+
+    /**
+     * Debug-only timed variant used to measure Kotlin dispatch to native input driver overhead.
+     */
+    external fun onGamePadButtonEventByPortTimed(
+        port: Int,
+        buttonId: Int,
+        action: Int,
+        dispatchStartNs: Long
+    )
+
+    /**
      * Handles axis movement events.
      * @param guid 32 character hexadecimal string consisting of the controller's PID+VID.
      * @param port Port determined by controller connection order.
@@ -62,6 +78,28 @@ object NativeInput {
      * @param value Value along the given axis.
      */
     external fun onGamePadAxisEvent(guid: String, port: Int, axis: Int, value: Float)
+
+    /**
+     * Lower-overhead gameplay path for already registered Android controllers.
+     * Batches all changed axes from a MotionEvent into one JNI call.
+     */
+    external fun onGamePadAxisEventByPort(
+        port: Int,
+        axes: IntArray,
+        values: FloatArray,
+        count: Int
+    )
+
+    /**
+     * Debug-only timed variant used to measure Kotlin dispatch to native input driver overhead.
+     */
+    external fun onGamePadAxisEventByPortTimed(
+        port: Int,
+        axes: IntArray,
+        values: FloatArray,
+        count: Int,
+        dispatchStartNs: Long
+    )
 
     /**
      * Handles motion events.
@@ -180,6 +218,11 @@ object NativeInput {
      * @param device An [InputDevice] or the input overlay wrapped with [CitronInputDevice]
      */
     external fun registerController(device: CitronInputDevice)
+
+    /**
+     * Clears all controllers registered with the Android input driver before re-enumerating devices.
+     */
+    external fun clearRegisteredControllers()
 
     /**
      * Gets the names of input devices that have been registered with the input subsystem via [registerController]

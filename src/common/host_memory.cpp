@@ -27,8 +27,11 @@
 
 #endif // ^^^ Linux ^^^
 
+#include <atomic>
+#include <limits>
 #include <mutex>
 #include <random>
+#include <stdexcept>
 
 #include "common/alignment.h"
 #include "common/assert.h"
@@ -40,6 +43,32 @@ namespace Common {
 
 constexpr size_t PageAlignment = 0x1000;
 constexpr size_t HugePageSize = 0x200000;
+
+[[noreturn]] void CrashHostMemoryInvariant(const char* operation, const char* reason,
+                                           size_t virtual_offset, size_t host_offset,
+                                           size_t length, size_t virtual_size,
+                                           size_t backing_size, MemoryPermission perms,
+                                           u8* virtual_base, size_t virtual_base_offset) {
+    const bool virtual_overflow =
+        length > std::numeric_limits<size_t>::max() - virtual_offset;
+    const bool host_overflow = length > std::numeric_limits<size_t>::max() - host_offset;
+    const size_t virtual_end =
+        virtual_overflow ? std::numeric_limits<size_t>::max() : virtual_offset + length;
+    const size_t host_end =
+        host_overflow ? std::numeric_limits<size_t>::max() : host_offset + length;
+
+    LOG_CRITICAL(HW_Memory,
+                 "HostMemory::{} invariant failed: reason={} virtual_offset={:#x} "
+                 "host_offset={:#x} length={:#x} virtual_end={:#x} host_end={:#x} "
+                 "virtual_overflow={} host_overflow={} virtual_size={:#x} backing_size={:#x} "
+                 "perms={:#x} virtual_base={} virtual_base_offset={:#x}",
+                 operation, reason, virtual_offset, host_offset, length, virtual_end, host_end,
+                 virtual_overflow, host_overflow, virtual_size, backing_size, static_cast<u32>(perms),
+                 static_cast<void*>(virtual_base), virtual_base_offset);
+    Common::Log::Stop();
+    Crash();
+    throw std::runtime_error("HostMemory invariant failed");
+}
 
 #ifdef _WIN32
 
@@ -483,6 +512,10 @@ public:
     }
 
     void Map(size_t virtual_offset, size_t host_offset, size_t length, MemoryPermission perms) {
+        const u64 map_id = map_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        const size_t requested_virtual_offset = virtual_offset;
+        const size_t requested_length = length;
+
         // Intersect the range with our address space.
         AdjustMap(&virtual_offset, &length);
 
@@ -505,10 +538,30 @@ public:
 
         void* ret = mmap(virtual_base + virtual_offset, length, flags, MAP_SHARED | MAP_FIXED, fd,
                          host_offset);
-        ASSERT_MSG(ret != MAP_FAILED, "mmap failed: {}", strerror(errno));
+        if (ret == MAP_FAILED) [[unlikely]] {
+            const int saved_errno = errno;
+            LOG_CRITICAL(HW_Memory,
+                         "HostMemory::Map mmap failed: error={} ({}) map_id={} unmap_count={} "
+                         "requested_virtual_offset={:#x} adjusted_virtual_offset={:#x} "
+                         "host_offset={:#x} requested_length={:#x} adjusted_length={:#x} "
+                         "perms={:#x} prot_flags={:#x} fd={} virtual_base={} target={} "
+                         "backing_size={:#x} virtual_size={:#x}",
+                         saved_errno, strerror(saved_errno), map_id,
+                         unmap_count.load(std::memory_order_relaxed), requested_virtual_offset,
+                         virtual_offset, host_offset, requested_length, length,
+                         static_cast<u32>(perms), flags, fd, static_cast<void*>(virtual_base),
+                         static_cast<void*>(virtual_base + virtual_offset), backing_size,
+                         virtual_size);
+            Common::Log::Stop();
+            Crash();
+        }
     }
 
     void Unmap(size_t virtual_offset, size_t length) {
+        const u64 unmap_id = unmap_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        const size_t requested_virtual_offset = virtual_offset;
+        const size_t requested_length = length;
+
         // The method name is wrong. We're still talking about the virtual range.
         // We don't want to unmap, we want to reserve this memory.
 
@@ -521,7 +574,21 @@ public:
 
         void* ret = mmap(merged_pointer, merged_size, PROT_NONE,
                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-        ASSERT_MSG(ret != MAP_FAILED, "mmap failed: {}", strerror(errno));
+        if (ret == MAP_FAILED) [[unlikely]] {
+            const int saved_errno = errno;
+            LOG_CRITICAL(HW_Memory,
+                         "HostMemory::Unmap reserve mmap failed: error={} ({}) map_count={} "
+                         "unmap_id={} requested_virtual_offset={:#x} adjusted_virtual_offset={:#x} "
+                         "requested_length={:#x} adjusted_length={:#x} merged_pointer={} "
+                         "merged_size={:#x} virtual_base={} backing_size={:#x} virtual_size={:#x}",
+                         saved_errno, strerror(saved_errno),
+                         map_count.load(std::memory_order_relaxed), unmap_id,
+                         requested_virtual_offset, virtual_offset, requested_length, length,
+                         merged_pointer, merged_size, static_cast<void*>(virtual_base), backing_size,
+                         virtual_size);
+            Common::Log::Stop();
+            Crash();
+        }
     }
 
     void Protect(size_t virtual_offset, size_t length, bool read, bool write, bool execute) {
@@ -597,6 +664,8 @@ private:
 
     int fd{-1}; // memfd file descriptor, -1 is the error value of memfd_create
     FreeRegionManager free_manager{};
+    std::atomic<u64> map_count{0};
+    std::atomic<u64> unmap_count{0};
 };
 
 #else // ^^^ Linux ^^^ vvv Generic vvv
@@ -652,11 +721,33 @@ HostMemory& HostMemory::operator=(HostMemory&&) noexcept = default;
 
 void HostMemory::Map(size_t virtual_offset, size_t host_offset, size_t length,
                      MemoryPermission perms, bool separate_heap) {
-    ASSERT(virtual_offset % PageAlignment == 0);
-    ASSERT(host_offset % PageAlignment == 0);
-    ASSERT(length % PageAlignment == 0);
-    ASSERT(virtual_offset + length <= virtual_size);
-    ASSERT(host_offset + length <= backing_size);
+    if (virtual_offset % PageAlignment != 0) [[unlikely]] {
+        CrashHostMemoryInvariant("Map", "virtual_offset is not page aligned", virtual_offset,
+                                 host_offset, length, virtual_size, backing_size, perms, virtual_base,
+                                 virtual_base_offset);
+    }
+    if (host_offset % PageAlignment != 0) [[unlikely]] {
+        CrashHostMemoryInvariant("Map", "host_offset is not page aligned", virtual_offset,
+                                 host_offset, length, virtual_size, backing_size, perms, virtual_base,
+                                 virtual_base_offset);
+    }
+    if (length % PageAlignment != 0) [[unlikely]] {
+        CrashHostMemoryInvariant("Map", "length is not page aligned", virtual_offset, host_offset,
+                                 length, virtual_size, backing_size, perms, virtual_base,
+                                 virtual_base_offset);
+    }
+    if (length > std::numeric_limits<size_t>::max() - virtual_offset ||
+        virtual_offset + length > virtual_size) [[unlikely]] {
+        CrashHostMemoryInvariant("Map", "virtual range exceeds virtual_size", virtual_offset,
+                                 host_offset, length, virtual_size, backing_size, perms, virtual_base,
+                                 virtual_base_offset);
+    }
+    if (length > std::numeric_limits<size_t>::max() - host_offset ||
+        host_offset + length > backing_size) [[unlikely]] {
+        CrashHostMemoryInvariant("Map", "host range exceeds backing_size", virtual_offset,
+                                 host_offset, length, virtual_size, backing_size, perms, virtual_base,
+                                 virtual_base_offset);
+    }
     if (length == 0 || !virtual_base || !impl) {
         return;
     }
@@ -664,9 +755,21 @@ void HostMemory::Map(size_t virtual_offset, size_t host_offset, size_t length,
 }
 
 void HostMemory::Unmap(size_t virtual_offset, size_t length, bool separate_heap) {
-    ASSERT(virtual_offset % PageAlignment == 0);
-    ASSERT(length % PageAlignment == 0);
-    ASSERT(virtual_offset + length <= virtual_size);
+    if (virtual_offset % PageAlignment != 0) [[unlikely]] {
+        CrashHostMemoryInvariant("Unmap", "virtual_offset is not page aligned", virtual_offset, 0,
+                                 length, virtual_size, backing_size, {}, virtual_base,
+                                 virtual_base_offset);
+    }
+    if (length % PageAlignment != 0) [[unlikely]] {
+        CrashHostMemoryInvariant("Unmap", "length is not page aligned", virtual_offset, 0, length,
+                                 virtual_size, backing_size, {}, virtual_base, virtual_base_offset);
+    }
+    if (length > std::numeric_limits<size_t>::max() - virtual_offset ||
+        virtual_offset + length > virtual_size) [[unlikely]] {
+        CrashHostMemoryInvariant("Unmap", "virtual range exceeds virtual_size", virtual_offset, 0,
+                                 length, virtual_size, backing_size, {}, virtual_base,
+                                 virtual_base_offset);
+    }
     if (length == 0 || !virtual_base || !impl) {
         return;
     }
@@ -674,9 +777,22 @@ void HostMemory::Unmap(size_t virtual_offset, size_t length, bool separate_heap)
 }
 
 void HostMemory::Protect(size_t virtual_offset, size_t length, MemoryPermission perm) {
-    ASSERT(virtual_offset % PageAlignment == 0);
-    ASSERT(length % PageAlignment == 0);
-    ASSERT(virtual_offset + length <= virtual_size);
+    if (virtual_offset % PageAlignment != 0) [[unlikely]] {
+        CrashHostMemoryInvariant("Protect", "virtual_offset is not page aligned", virtual_offset,
+                                 0, length, virtual_size, backing_size, perm, virtual_base,
+                                 virtual_base_offset);
+    }
+    if (length % PageAlignment != 0) [[unlikely]] {
+        CrashHostMemoryInvariant("Protect", "length is not page aligned", virtual_offset, 0,
+                                 length, virtual_size, backing_size, perm, virtual_base,
+                                 virtual_base_offset);
+    }
+    if (length > std::numeric_limits<size_t>::max() - virtual_offset ||
+        virtual_offset + length > virtual_size) [[unlikely]] {
+        CrashHostMemoryInvariant("Protect", "virtual range exceeds virtual_size", virtual_offset,
+                                 0, length, virtual_size, backing_size, perm, virtual_base,
+                                 virtual_base_offset);
+    }
     if (length == 0 || !virtual_base || !impl) {
         return;
     }

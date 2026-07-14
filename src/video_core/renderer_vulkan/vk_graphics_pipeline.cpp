@@ -43,7 +43,9 @@ using VideoCore::Surface::PixelFormatFromDepthFormat;
 using VideoCore::Surface::PixelFormatFromRenderTargetFormat;
 
 constexpr size_t NUM_STAGES = Tegra::Engines::Maxwell3D::Regs::MaxShaderStage;
-constexpr size_t MAX_IMAGE_ELEMENTS = 1024;
+// Descriptor scratch storage is dynamically sized. Keep this as a diagnostic threshold for
+// unusually large bindless pipelines, rather than rejecting them as the old fixed arrays did.
+constexpr size_t LARGE_IMAGE_DESCRIPTOR_COUNT = 1024;
 
 // Stale SamplerIds are possible if the sampler pool is rebuilt with a different
 // sampler at the same handle while the cbuf bytes don't change. Add a pool
@@ -1081,7 +1083,12 @@ void GraphicsPipeline::Validate() {
         num_images += Shader::NumDescriptors(info.texture_descriptors);
         num_images += Shader::NumDescriptors(info.image_descriptors);
     }
-    ASSERT(num_images <= MAX_IMAGE_ELEMENTS);
+    if (num_images > LARGE_IMAGE_DESCRIPTOR_COUNT) {
+        LOG_WARNING(Render_Vulkan,
+                    "Graphics pipeline has {} image descriptors; using dynamically sized "
+                    "descriptor scratch storage",
+                    num_images);
+    }
 }
 
 } // namespace Vulkan

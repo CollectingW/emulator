@@ -21,6 +21,7 @@ import org.citron.citron_emu.features.input.model.AnalogDirection
 import org.citron.citron_emu.features.settings.model.view.AnalogInputSetting
 import org.citron.citron_emu.features.settings.model.view.ButtonInputSetting
 import org.citron.citron_emu.features.settings.model.view.IntSingleChoiceSetting
+import org.citron.citron_emu.features.settings.model.view.LogFilterSetting
 import org.citron.citron_emu.features.settings.model.view.SettingsItem
 import org.citron.citron_emu.features.settings.model.view.SingleChoiceSetting
 import org.citron.citron_emu.features.settings.model.view.SliderSetting
@@ -154,6 +155,26 @@ class SettingsDialogFragment : DialogFragment(), DialogInterface.OnClickListener
                     .create()
             }
 
+            SettingsItem.TYPE_LOG_FILTER -> {
+                val item = settingsViewModel.clickedItem as LogFilterSetting
+                MaterialAlertDialogBuilder(requireContext())
+                    .setTitle(item.title)
+                    .setSingleChoiceItems(item.choices, item.selectedValueIndex, this)
+                    .create()
+            }
+
+            TYPE_LOG_FILTER_CUSTOM -> {
+                stringInputBinding = DialogEditTextBinding.inflate(layoutInflater)
+                val item = settingsViewModel.clickedItem as LogFilterSetting
+                stringInputBinding.editText.setText(item.getSelectedValue())
+                MaterialAlertDialogBuilder(requireContext())
+                    .setTitle(item.title)
+                    .setView(stringInputBinding.root)
+                    .setPositiveButton(android.R.string.ok, this)
+                    .setNegativeButton(android.R.string.cancel, defaultCancelListener)
+                    .create()
+            }
+
             SettingsItem.TYPE_INT_SINGLE_CHOICE -> {
                 val item = settingsViewModel.clickedItem as IntSingleChoiceSetting
                 MaterialAlertDialogBuilder(requireContext())
@@ -174,6 +195,7 @@ class SettingsDialogFragment : DialogFragment(), DialogInterface.OnClickListener
         return when (type) {
             SettingsItem.TYPE_SLIDER -> sliderBinding.root
             SettingsItem.TYPE_STRING_INPUT -> stringInputBinding.root
+            TYPE_LOG_FILTER_CUSTOM -> stringInputBinding.root
             else -> super.onCreateView(inflater, container, savedInstanceState)
         }
     }
@@ -204,6 +226,26 @@ class SettingsDialogFragment : DialogFragment(), DialogInterface.OnClickListener
                 val scSetting = settingsViewModel.clickedItem as StringSingleChoiceSetting
                 val value = scSetting.getValueAt(which)
                 scSetting.setSelectedValue(value)
+            }
+
+            is LogFilterSetting -> {
+                val logFilterSetting = settingsViewModel.clickedItem as LogFilterSetting
+                if (type == TYPE_LOG_FILTER_CUSTOM) {
+                    logFilterSetting.setSelectedValue(
+                        (stringInputBinding.editText.text ?: "").toString()
+                    )
+                } else if (which == logFilterSetting.customIndex) {
+                    dismiss()
+                    newInstance(
+                        settingsViewModel,
+                        logFilterSetting,
+                        TYPE_LOG_FILTER_CUSTOM,
+                        position
+                    ).show(parentFragmentManager, TAG)
+                    return
+                } else {
+                    logFilterSetting.setSelectedValue(logFilterSetting.getValueAt(which))
+                }
             }
 
             is IntSingleChoiceSetting -> {
@@ -265,6 +307,7 @@ class SettingsDialogFragment : DialogFragment(), DialogInterface.OnClickListener
         const val TAG = "SettingsDialogFragment"
 
         const val TYPE_RESET_SETTING = -1
+        const val TYPE_LOG_FILTER_CUSTOM = -2
 
         const val TITLE = "Title"
         const val TYPE = "Type"

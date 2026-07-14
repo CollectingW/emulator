@@ -778,7 +778,7 @@ struct Values {
     Setting<bool> perform_vulkan_check{linkage, true, "perform_vulkan_check", Category::Debugging};
 
     // Miscellaneous
-    Setting<std::string> log_filter{linkage, "*:Info", "log_filter", Category::Debugging};
+    Setting<std::string> log_filter{linkage, "*:Warning", "log_filter", Category::Debugging};
     Setting<bool> use_dev_keys{linkage, false, "use_dev_keys", Category::Miscellaneous};
 
     // Network
@@ -804,6 +804,13 @@ struct Values {
     std::map<u64, std::vector<std::string>> disabled_addons;
 
     std::vector<std::string> external_content_dirs;
+    // Tracks whether the default sdmc/citron/content directory has already been
+    // seeded into external_content_dirs once. Without this, a user who explicitly
+    // clears the list via Settings -> General -> Remove would have it silently
+    // re-added on every restart, since an empty vector is indistinguishable from
+    // a never-configured one.
+    Setting<bool> external_content_dirs_seeded{linkage, false, "external_content_dirs_seeded",
+                                               Category::Paths};
 
     // Cheats
     // Key: build_id (hex string), Value: set of disabled cheat names
@@ -833,6 +840,7 @@ bool IsGPULevelNormal();
 bool IsFastmemEnabled();
 bool IsCpuUltraLowAccuracy();
 void SetNceEnabled(bool is_64bit);
+void DisableNceForCurrentProcess();
 bool IsNceEnabled();
 
 bool IsDockedMode();

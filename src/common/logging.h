@@ -5,8 +5,10 @@
 
 #pragma once
 
-#include <chrono>
 #include <algorithm>
+#include <chrono>
+#include <string>
+#include <string_view>
 #include <type_traits>
 #include <fmt/ranges.h>
 #include "common/swap.h"
@@ -67,6 +69,7 @@ struct Filter {
     }
     std::array<Level, std::size_t(Class::Count)> class_levels;
 };
+[[nodiscard]] std::string CanonicalizeFilterString(std::string_view filter_view);
 void Initialize() noexcept;
 void Start() noexcept;
 void Stop() noexcept;

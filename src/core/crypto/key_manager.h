@@ -6,6 +6,7 @@
 #include <array>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -283,14 +284,17 @@ public:
     void DeriveBase();
     void DeriveETicket(PartitionDataManager& data, const FileSys::ContentProvider& provider);
     void PopulateTickets();
+    void ReloadTickets();
     void SynthesizeTickets();
 
     void PopulateFromPartitionData(PartitionDataManager& data);
 
-    const std::map<u128, Ticket>& GetCommonTickets() const;
-    const std::map<u128, Ticket>& GetPersonalizedTickets() const;
+    std::map<u128, Ticket> GetCommonTickets() const;
+    std::map<u128, Ticket> GetPersonalizedTickets() const;
 
     bool AddTicket(const Ticket& ticket);
+    bool PersistTicket(const Ticket& ticket);
+    bool AddAndPersistTicket(const Ticket& ticket);
 
     void ReloadKeys();
     bool AreKeysLoaded() const;
@@ -305,6 +309,7 @@ private:
     std::map<u128, Ticket> common_tickets;
     std::map<u128, Ticket> personal_tickets;
     bool ticket_databases_loaded = false;
+    mutable std::recursive_mutex key_mutex;
 
     std::array<std::array<u8, 0xB0>, 0x20> encrypted_keyblobs{};
     std::array<std::array<u8, 0x90>, 0x20> keyblobs{};

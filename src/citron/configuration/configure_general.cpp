@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 #include <QCheckBox>
+#include <QDesktopServices>
 #include <QFileDialog>
 #include <QGuiApplication>
 #include <QListWidget>
@@ -49,6 +50,12 @@ ConfigureGeneral::ConfigureGeneral(Core::System& system_,
             &ConfigureGeneral::AddExternalContentDir);
     connect(ui->button_remove_external_content, &QPushButton::clicked, this,
             &ConfigureGeneral::RemoveExternalContentDir);
+    connect(ui->button_open_external_content, &QPushButton::clicked, this, [this] {
+        const auto* item = ui->external_content_list->currentItem();
+        if (!item)
+            return;
+        QDesktopServices::openUrl(QUrl::fromLocalFile(item->text()));
+    });
 }
 
 ConfigureGeneral::~ConfigureGeneral() = default;

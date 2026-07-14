@@ -199,6 +199,10 @@ bool IsNceEnabled() {
     return is_nce_enabled;
 }
 
+void DisableNceForCurrentProcess() {
+    is_nce_enabled = false;
+}
+
 bool IsDockedMode() {
     return values.use_docked_mode.GetValue() == Settings::ConsoleMode::Docked;
 }

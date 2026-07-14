@@ -36,6 +36,7 @@ import androidx.drawerlayout.widget.DrawerLayout
 import androidx.drawerlayout.widget.DrawerLayout.DrawerListener
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.findNavController
 import androidx.navigation.fragment.navArgs
 import androidx.window.layout.FoldingFeature
@@ -43,6 +44,12 @@ import androidx.window.layout.WindowInfoTracker
 import androidx.window.layout.WindowLayoutInfo
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.slider.Slider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.citron.citron_emu.HomeNavigationDirections
 import org.citron.citron_emu.NativeLibrary
 import org.citron.citron_emu.R
@@ -58,6 +65,8 @@ import org.citron.citron_emu.features.settings.utils.SettingsFile
 import org.citron.citron_emu.model.DriverViewModel
 import org.citron.citron_emu.model.Game
 import org.citron.citron_emu.model.EmulationViewModel
+import org.citron.citron_emu.model.Patch
+import org.citron.citron_emu.model.PatchType
 import org.citron.citron_emu.overlay.model.OverlayControl
 import org.citron.citron_emu.overlay.model.OverlayLayout
 import org.citron.citron_emu.utils.*
@@ -81,6 +90,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
 
     private val emulationViewModel: EmulationViewModel by activityViewModels()
     private val driverViewModel: DriverViewModel by activityViewModels()
+    private val cheatToggleMutex = Mutex()
 
     private var isInFoldableLayout = false
 
@@ -143,6 +153,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         driverViewModel.onLaunchGame()
 
         // So this fragment doesn't restart on configuration changes; i.e. rotation.
+        @Suppress("DEPRECATION")
         retainInstance = true
         emulationState = EmulationState(game.path) {
             return@EmulationState driverViewModel.isInteractionAllowed.value
@@ -279,6 +290,11 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
 
                 R.id.menu_overlay_controls -> {
                     showOverlayOptions()
+                    true
+                }
+
+                R.id.menu_cheats -> {
+                    showCheats()
                     true
                 }
 
@@ -770,6 +786,73 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         emulationState.clearSurface()
     }
 
+    private fun showCheats() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            val cheats = withContext(Dispatchers.IO) {
+                NativeLibrary.getCheatsForFile(game.path, game.programId)
+                    ?.filter { PatchType.from(it.type) == PatchType.Cheat }
+                    ?: emptyList()
+            }
+
+            binding.drawerLayout.close()
+
+            if (cheats.isEmpty()) {
+                MaterialAlertDialogBuilder(requireContext())
+                    .setTitle(R.string.emulation_cheats)
+                    .setMessage(R.string.emulation_cheats_empty)
+                    .setPositiveButton(R.string.close, null)
+                    .show()
+                return@launch
+            }
+
+            MaterialAlertDialogBuilder(requireContext())
+                .setTitle(R.string.emulation_cheats)
+                .setMultiChoiceItems(
+                    cheats.map { it.name }.toTypedArray(),
+                    cheats.map { it.enabled }.toBooleanArray()
+                ) { _, which, isChecked ->
+                    setCheatEnabled(cheats[which], isChecked)
+                }
+                .setPositiveButton(R.string.close, null)
+                .show()
+        }
+    }
+
+    private fun setCheatEnabled(cheat: Patch, enabled: Boolean) {
+        viewLifecycleOwner.lifecycleScope.launch {
+            cheatToggleMutex.withLock {
+                var shouldResume = false
+                try {
+                    shouldResume = emulationState.isRunning && !NativeLibrary.isPaused()
+                    if (shouldResume) {
+                        emulationState.pause()
+                    }
+
+                    val reloaded = withContext(Dispatchers.IO) {
+                        NativeLibrary.setCheatEnabled(
+                            cheat.titleId,
+                            cheat.version,
+                            cheat.name,
+                            enabled
+                        )
+                        NativeConfig.saveGlobalConfig()
+                        NativeLibrary.reloadCheats(cheat.programId)
+                    }
+
+                    if (!reloaded) {
+                        Log.warning("[EmulationFragment] Cheat reload requested without an active cheat engine.")
+                    }
+                } finally {
+                    withContext(NonCancellable) {
+                        if (shouldResume && emulationState.isPaused) {
+                            emulationState.run(false)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private fun showOverlayOptions() {
         val anchor = binding.inGameMenu.findViewById<View>(R.id.menu_overlay_controls)
         val popup = PopupMenu(requireContext(), anchor)
@@ -1018,7 +1101,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             val cutInsets: Insets = windowInsets.getInsets(WindowInsetsCompat.Type.displayCutout())
             var left = 0
             var right = 0
-            if (ViewCompat.getLayoutDirection(v) == ViewCompat.LAYOUT_DIRECTION_LTR) {
+            if (v.layoutDirection == View.LAYOUT_DIRECTION_LTR) {
                 left = cutInsets.left
             } else {
                 right = cutInsets.right

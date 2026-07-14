@@ -1003,10 +1003,11 @@ class SettingsFragmentPresenter(
 
             add(HeaderSetting(R.string.logging))
             add(
-                StringInputSetting(
+                LogFilterSetting(
                     StringSetting.LOG_FILTER,
                     titleId = R.string.log_filter,
-                    descriptionId = R.string.log_filter_description
+                    descriptionId = R.string.log_filter_description,
+                    customChoice = context.getString(R.string.log_filter_custom)
                 )
             )
         }
@@ -1016,6 +1017,23 @@ class SettingsFragmentPresenter(
         sl.apply {
             add(HeaderSetting(R.string.network_settings_header))
             add(BooleanSetting.AIRPLANE_MODE.key)
+            add(
+                RunnableSetting(
+                    titleId = R.string.direct_connect,
+                    descriptionString = context.getString(
+                        R.string.direct_connect_status,
+                        when (NativeLibrary.getRoomConnectionState()) {
+                            2 -> context.getString(R.string.direct_connect_connecting)
+                            3, 4 -> context.getString(R.string.direct_connect_connected)
+                            else -> context.getString(R.string.direct_connect_disconnected)
+                        }
+                    ),
+                    isRunnable = !NativeLibrary.isRunning(),
+                    iconId = R.drawable.ic_share
+                ) {
+                    settingsViewModel.setShouldShowDirectConnectDialog(true)
+                }
+            )
         }
     }
 

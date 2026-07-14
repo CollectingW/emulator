@@ -161,7 +161,7 @@ class SearchFragment : Fragment() {
             binding.searchText.requestFocus()
             val imm = requireActivity()
                 .getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager?
-            imm?.showSoftInput(binding.searchText, InputMethodManager.SHOW_IMPLICIT)
+            imm?.showSoftInput(binding.searchText, 0)
         }
     }
 
@@ -190,7 +190,7 @@ class SearchFragment : Fragment() {
             binding.noResultsView.updatePadding(bottom = spacingNavigation + barInsets.bottom)
 
             val mlpDivider = binding.divider.layoutParams as ViewGroup.MarginLayoutParams
-            if (ViewCompat.getLayoutDirection(view) == ViewCompat.LAYOUT_DIRECTION_LTR) {
+            if (view.layoutDirection == View.LAYOUT_DIRECTION_LTR) {
                 binding.frameSearch.updatePadding(left = spacingNavigationRail)
                 binding.gridGamesSearch.updatePadding(left = spacingNavigationRail)
                 binding.noResultsView.updatePadding(left = spacingNavigationRail)

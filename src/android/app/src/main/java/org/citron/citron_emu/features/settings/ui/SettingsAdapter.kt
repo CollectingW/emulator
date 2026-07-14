@@ -53,7 +53,9 @@ class SettingsAdapter(
                 SwitchSettingViewHolder(ListItemSettingSwitchBinding.inflate(inflater), this)
             }
 
-            SettingsItem.TYPE_SINGLE_CHOICE, SettingsItem.TYPE_STRING_SINGLE_CHOICE -> {
+            SettingsItem.TYPE_SINGLE_CHOICE,
+            SettingsItem.TYPE_STRING_SINGLE_CHOICE,
+            SettingsItem.TYPE_LOG_FILTER -> {
                 SingleChoiceViewHolder(ListItemSettingBinding.inflate(inflater), this)
             }
 
@@ -125,6 +127,15 @@ class SettingsAdapter(
             settingsViewModel,
             item,
             SettingsItem.TYPE_STRING_SINGLE_CHOICE,
+            position
+        ).show(fragment.childFragmentManager, SettingsDialogFragment.TAG)
+    }
+
+    fun onLogFilterClick(item: LogFilterSetting, position: Int) {
+        SettingsDialogFragment.newInstance(
+            settingsViewModel,
+            item,
+            SettingsItem.TYPE_LOG_FILTER,
             position
         ).show(fragment.childFragmentManager, SettingsDialogFragment.TAG)
     }

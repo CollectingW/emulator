@@ -234,18 +234,33 @@ Ticket Ticket::Read(std::span<const u8> raw_data) {
     switch (sig_type) {
     case SignatureType::RSA_4096_SHA1:
     case SignatureType::RSA_4096_SHA256: {
+        if (raw_data.size() < sizeof(RSA4096Ticket)) {
+            LOG_WARNING(Crypto, "Attempted to parse RSA4096 ticket buffer with invalid size {}.",
+                        raw_data.size());
+            return Ticket{std::monostate()};
+        }
         RSA4096Ticket ticket{};
         std::memcpy(&ticket, raw_data.data(), sizeof(ticket));
         return Ticket{ticket};
     }
     case SignatureType::RSA_2048_SHA1:
     case SignatureType::RSA_2048_SHA256: {
+        if (raw_data.size() < sizeof(RSA2048Ticket)) {
+            LOG_WARNING(Crypto, "Attempted to parse RSA2048 ticket buffer with invalid size {}.",
+                        raw_data.size());
+            return Ticket{std::monostate()};
+        }
         RSA2048Ticket ticket{};
         std::memcpy(&ticket, raw_data.data(), sizeof(ticket));
         return Ticket{ticket};
     }
     case SignatureType::ECDSA_SHA1:
     case SignatureType::ECDSA_SHA256: {
+        if (raw_data.size() < sizeof(ECDSATicket)) {
+            LOG_WARNING(Crypto, "Attempted to parse ECDSA ticket buffer with invalid size {}.",
+                        raw_data.size());
+            return Ticket{std::monostate()};
+        }
         ECDSATicket ticket{};
         std::memcpy(&ticket, raw_data.data(), sizeof(ticket));
         return Ticket{ticket};
@@ -479,6 +494,22 @@ Loader::ResultStatus DeriveSDKeys(std::array<Key256, 2>& sd_keys, KeyManager& ke
     return Loader::ResultStatus::Success;
 }
 
+static std::optional<std::size_t> GetTicketSize(SignatureType sig_type) {
+    switch (sig_type) {
+    case SignatureType::RSA_4096_SHA1:
+    case SignatureType::RSA_4096_SHA256:
+        return sizeof(RSA4096Ticket);
+    case SignatureType::RSA_2048_SHA1:
+    case SignatureType::RSA_2048_SHA256:
+        return sizeof(RSA2048Ticket);
+    case SignatureType::ECDSA_SHA1:
+    case SignatureType::ECDSA_SHA256:
+        return sizeof(ECDSATicket);
+    default:
+        return std::nullopt;
+    }
+}
+
 std::vector<Ticket> GetTicketblob(const Common::FS::IOFile& ticket_save) {
     if (!ticket_save.IsOpen()) {
         return {};
@@ -490,19 +521,44 @@ std::vector<Ticket> GetTicketblob(const Common::FS::IOFile& ticket_save) {
     }
 
     std::vector<Ticket> out;
-    for (std::size_t offset = 0; offset + 0x4 < buffer.size(); ++offset) {
-        if (buffer[offset] == 0x4 && buffer[offset + 1] == 0x0 && buffer[offset + 2] == 0x1 &&
-            buffer[offset + 3] == 0x0) {
-            // NOTE: Assumes ticket blob will only contain RSA-2048 tickets.
-            auto ticket = Ticket::Read(std::span{buffer.data() + offset, sizeof(RSA2048Ticket)});
-            offset += sizeof(RSA2048Ticket);
-            if (ticket.IsValid()) {
-                out.push_back(ticket);
-            }
+    for (std::size_t offset = 0; offset + sizeof(SignatureType) <= buffer.size(); ++offset) {
+        SignatureType sig_type;
+        std::memcpy(&sig_type, buffer.data() + offset, sizeof(sig_type));
+
+        const auto ticket_size = GetTicketSize(sig_type);
+        if (!ticket_size) {
+            continue;
+        }
+        if (offset + *ticket_size > buffer.size()) {
+            break;
+        }
+
+        auto ticket = Ticket::Read(std::span{buffer.data() + offset, *ticket_size});
+        offset += *ticket_size - 1;
+        if (ticket.IsValid()) {
+            out.push_back(ticket);
         }
     }
 
     return out;
+}
+
+static std::span<const u8> GetTicketBytes(const Ticket& ticket) {
+    if (const auto* rsa4096 = std::get_if<RSA4096Ticket>(&ticket.data)) {
+        return {reinterpret_cast<const u8*>(rsa4096), sizeof(RSA4096Ticket)};
+    }
+    if (const auto* rsa2048 = std::get_if<RSA2048Ticket>(&ticket.data)) {
+        return {reinterpret_cast<const u8*>(rsa2048), sizeof(RSA2048Ticket)};
+    }
+    if (const auto* ecdsa = std::get_if<ECDSATicket>(&ticket.data)) {
+        return {reinterpret_cast<const u8*>(ecdsa), sizeof(ECDSATicket)};
+    }
+
+    return {};
+}
+
+static bool TicketMatchesRightsId(const Ticket& ticket, const std::array<u8, 0x10>& rights_id) {
+    return ticket.IsValid() && ticket.GetData().rights_id == rights_id;
 }
 
 template <size_t size>
@@ -634,6 +690,12 @@ KeyManager::KeyManager() {
 }
 
 void KeyManager::ReloadKeys() {
+    std::scoped_lock lock{key_mutex};
+
+    ticket_databases_loaded = false;
+    common_tickets.clear();
+    personal_tickets.clear();
+
     // Initialize keys
     const auto citron_keys_dir = Common::FS::GetCitronPath(Common::FS::CitronPath::KeysDir);
 
@@ -665,6 +727,8 @@ static bool ValidCryptoRevisionString(std::string_view base, size_t begin, size_
 }
 
 void KeyManager::LoadFromFile(const std::filesystem::path& file_path, bool is_title_keys) {
+    std::scoped_lock lock{key_mutex};
+
     if (!Common::FS::Exists(file_path)) {
         return;
     }
@@ -775,6 +839,7 @@ void KeyManager::LoadFromFile(const std::filesystem::path& file_path, bool is_ti
 }
 
 bool KeyManager::AreKeysLoaded() const {
+    std::scoped_lock lock{key_mutex};
     return !s128_keys.empty() && !s256_keys.empty();
 }
 
@@ -802,36 +867,47 @@ bool KeyManager::BaseDeriveNecessary() const {
 }
 
 bool KeyManager::HasKey(S128KeyType id, u64 field1, u64 field2) const {
+    std::scoped_lock lock{key_mutex};
     return s128_keys.find({id, field1, field2}) != s128_keys.end();
 }
 
 bool KeyManager::HasKey(S256KeyType id, u64 field1, u64 field2) const {
+    std::scoped_lock lock{key_mutex};
     return s256_keys.find({id, field1, field2}) != s256_keys.end();
 }
 
 Key128 KeyManager::GetKey(S128KeyType id, u64 field1, u64 field2) const {
-    if (!HasKey(id, field1, field2)) {
+    std::scoped_lock lock{key_mutex};
+
+    const auto iter = s128_keys.find({id, field1, field2});
+    if (iter == s128_keys.end()) {
         return {};
     }
-    return s128_keys.at({id, field1, field2});
+    return iter->second;
 }
 
 Key256 KeyManager::GetKey(S256KeyType id, u64 field1, u64 field2) const {
-    if (!HasKey(id, field1, field2)) {
+    std::scoped_lock lock{key_mutex};
+
+    const auto iter = s256_keys.find({id, field1, field2});
+    if (iter == s256_keys.end()) {
         return {};
     }
-    return s256_keys.at({id, field1, field2});
+    return iter->second;
 }
 
 Key256 KeyManager::GetBISKey(u8 partition_id) const {
+    std::scoped_lock lock{key_mutex};
+
     Key256 out{};
 
     for (const auto& bis_type : {BISKeyType::Crypto, BISKeyType::Tweak}) {
-        if (HasKey(S128KeyType::BIS, partition_id, static_cast<u64>(bis_type))) {
+        const auto iter =
+            s128_keys.find({S128KeyType::BIS, partition_id, static_cast<u64>(bis_type)});
+        if (iter != s128_keys.end()) {
             std::memcpy(
                 out.data() + sizeof(Key128) * static_cast<u64>(bis_type),
-                s128_keys.at({S128KeyType::BIS, partition_id, static_cast<u64>(bis_type)}).data(),
-                sizeof(Key128));
+                iter->second.data(), sizeof(Key128));
         }
     }
 
@@ -877,6 +953,8 @@ void KeyManager::WriteKeyToFile(KeyCategory category, std::string_view keyname,
 }
 
 void KeyManager::SetKey(S128KeyType id, Key128 key, u64 field1, u64 field2) {
+    std::scoped_lock lock{key_mutex};
+
     if (s128_keys.find({id, field1, field2}) != s128_keys.end() || key == Key128{}) {
         return;
     }
@@ -924,6 +1002,8 @@ void KeyManager::SetKey(S128KeyType id, Key128 key, u64 field1, u64 field2) {
 }
 
 void KeyManager::SetKey(S256KeyType id, Key256 key, u64 field1, u64 field2) {
+    std::scoped_lock lock{key_mutex};
+
     if (s256_keys.find({id, field1, field2}) != s256_keys.end() || key == Key256{}) {
         return;
     }
@@ -1139,6 +1219,8 @@ void KeyManager::DeriveETicket(PartitionDataManager& data,
 }
 
 void KeyManager::PopulateTickets() {
+    std::scoped_lock lock{key_mutex};
+
     if (ticket_databases_loaded) {
         return;
     }
@@ -1169,7 +1251,20 @@ void KeyManager::PopulateTickets() {
     }
 }
 
+void KeyManager::ReloadTickets() {
+    std::scoped_lock lock{key_mutex};
+
+    ticket_databases_loaded = false;
+    common_tickets.clear();
+    personal_tickets.clear();
+
+    PopulateTickets();
+    SynthesizeTickets();
+}
+
 void KeyManager::SynthesizeTickets() {
+    std::scoped_lock lock{key_mutex};
+
     for (const auto& key : s128_keys) {
         if (key.first.type != S128KeyType::Titlekey) {
             continue;
@@ -1245,15 +1340,19 @@ void KeyManager::PopulateFromPartitionData(PartitionDataManager& data) {
     DeriveBase();
 }
 
-const std::map<u128, Ticket>& KeyManager::GetCommonTickets() const {
+std::map<u128, Ticket> KeyManager::GetCommonTickets() const {
+    std::scoped_lock lock{key_mutex};
     return common_tickets;
 }
 
-const std::map<u128, Ticket>& KeyManager::GetPersonalizedTickets() const {
+std::map<u128, Ticket> KeyManager::GetPersonalizedTickets() const {
+    std::scoped_lock lock{key_mutex};
     return personal_tickets;
 }
 
 bool KeyManager::AddTicket(const Ticket& ticket) {
+    std::scoped_lock lock{key_mutex};
+
     if (!ticket.IsValid()) {
         LOG_WARNING(Crypto, "Attempted to add invalid ticket.");
         return false;
@@ -1281,5 +1380,64 @@ bool KeyManager::AddTicket(const Ticket& ticket) {
     }
     SetKey(S128KeyType::Titlekey, key.value(), rights_id[1], rights_id[0]);
     return true;
+}
+
+bool KeyManager::PersistTicket(const Ticket& ticket) {
+    std::scoped_lock lock{key_mutex};
+
+    if (!ticket.IsValid()) {
+        LOG_WARNING(Crypto, "Attempted to persist invalid ticket.");
+        return false;
+    }
+
+    const auto ticket_path = Common::FS::GetCitronPath(Common::FS::CitronPath::NANDDir) /
+                             (ticket.GetData().type == TitleKeyType::Common
+                                  ? "system/save/80000000000000e1"
+                                  : "system/save/80000000000000e2");
+    if (!Common::FS::CreateParentDirs(ticket_path)) {
+        LOG_ERROR(Crypto, "Failed to create ticket save directory for {}",
+                  Common::FS::PathToUTF8String(ticket_path));
+        return false;
+    }
+
+    if (Common::FS::Exists(ticket_path)) {
+        const Common::FS::IOFile existing_file{ticket_path, Common::FS::FileAccessMode::Read,
+                                               Common::FS::FileType::BinaryFile};
+        const auto existing_tickets = GetTicketblob(existing_file);
+        if (std::any_of(existing_tickets.begin(), existing_tickets.end(),
+                        [&ticket](const Ticket& existing_ticket) {
+                            return TicketMatchesRightsId(existing_ticket,
+                                                         ticket.GetData().rights_id);
+                        })) {
+            return true;
+        }
+    }
+
+    const auto ticket_bytes = GetTicketBytes(ticket);
+    if (ticket_bytes.empty()) {
+        LOG_WARNING(Crypto, "Unable to serialize invalid ticket variant.");
+        return false;
+    }
+
+    const Common::FS::IOFile ticket_save{ticket_path, Common::FS::FileAccessMode::Append,
+                                         Common::FS::FileType::BinaryFile};
+    if (!ticket_save.IsOpen()) {
+        return false;
+    }
+
+    if (ticket_save.WriteSpan(ticket_bytes) != ticket_bytes.size()) {
+        LOG_ERROR(Crypto, "Failed to write ticket to {}", Common::FS::PathToUTF8String(ticket_path));
+        return false;
+    }
+
+    return ticket_save.Flush();
+}
+
+bool KeyManager::AddAndPersistTicket(const Ticket& ticket) {
+    std::scoped_lock lock{key_mutex};
+
+    const bool added = AddTicket(ticket);
+    const bool persisted = PersistTicket(ticket);
+    return added && persisted;
 }
 } // namespace Core::Crypto

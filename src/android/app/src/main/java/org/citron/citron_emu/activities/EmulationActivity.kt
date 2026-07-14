@@ -12,6 +12,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Rect
 import android.graphics.drawable.Icon
@@ -46,6 +47,7 @@ import org.citron.citron_emu.features.settings.model.IntSetting
 import org.citron.citron_emu.features.settings.model.Settings
 import org.citron.citron_emu.model.EmulationViewModel
 import org.citron.citron_emu.model.Game
+import org.citron.citron_emu.utils.DisplayModeUtil
 import org.citron.citron_emu.utils.InputHandler
 import org.citron.citron_emu.utils.Log
 import org.citron.citron_emu.utils.MemoryUtil
@@ -71,6 +73,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener {
     private val actionPlay = "ACTION_EMULATOR_PLAY"
     private val actionMute = "ACTION_EMULATOR_MUTE"
     private val actionUnmute = "ACTION_EMULATOR_UNMUTE"
+    private val pictureInPictureFailureActions: MutableSet<String> = mutableSetOf()
 
     private val emulationViewModel: EmulationViewModel by viewModels()
 
@@ -79,6 +82,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener {
         ThemeHelper.setTheme(this)
 
         super.onCreate(savedInstanceState)
+        DisplayModeUtil.preferHighestRefreshRate(this)
 
         InputHandler.updateControllerData()
         val players = NativeConfig.getInputSettings(true)
@@ -155,6 +159,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener {
                     this.findViewById(R.id.surface_input_overlay)
                 val im =
                     overlayView.context.getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
+                NativeLibrary.submitInlineKeyboardInput(keyCode)
                 im.hideSoftInputFromWindow(overlayView.windowToken, 0)
             } else {
                 val textChar = event.unicodeChar
@@ -186,12 +191,18 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener {
     }
 
     override fun onUserLeaveHint() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            if (BooleanSetting.PICTURE_IN_PICTURE.getBoolean() && !isInPictureInPictureMode) {
-                val pictureInPictureParamsBuilder = PictureInPictureParams.Builder()
-                    .getPictureInPictureActionsBuilder().getPictureInPictureAspectBuilder()
-                enterPictureInPictureMode(pictureInPictureParamsBuilder.build())
-            }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ||
+            !isPictureInPictureSupported() ||
+            !BooleanSetting.PICTURE_IN_PICTURE.getBoolean() ||
+            isInPictureInPictureMode
+        ) {
+            return
+        }
+
+        val pictureInPictureParamsBuilder = PictureInPictureParams.Builder()
+            .getPictureInPictureActionsBuilder().getPictureInPictureAspectBuilder()
+        runPictureInPictureAction("enter picture-in-picture mode") {
+            enterPictureInPictureMode(pictureInPictureParamsBuilder.build())
         }
     }
 
@@ -226,6 +237,8 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener {
         if (emulationViewModel.drawerOpen.value) {
             return super.dispatchGenericMotionEvent(event)
         }
+
+        window.decorView.requestUnbufferedDispatch(event.source)
 
         // Don't attempt to do anything if we are disconnecting a device.
         if (event.actionMasked == MotionEvent.ACTION_CANCEL) {
@@ -317,7 +330,18 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener {
             5 -> null // Stretch to window
             else -> null // Best fit
         }
-        return this.apply { aspectRatio?.let { setAspectRatio(it) } }
+        return this.apply { aspectRatio?.let { setAspectRatio(it.clampForPictureInPicture()) } }
+    }
+
+    private fun Rational.clampForPictureInPicture(): Rational {
+        val value = toFloat()
+        return when {
+            value < MIN_PICTURE_IN_PICTURE_ASPECT_RATIO.toFloat() ->
+                MIN_PICTURE_IN_PICTURE_ASPECT_RATIO
+            value > MAX_PICTURE_IN_PICTURE_ASPECT_RATIO.toFloat() ->
+                MAX_PICTURE_IN_PICTURE_ASPECT_RATIO
+            else -> this
+        }
     }
 
     private fun PictureInPictureParams.Builder.getPictureInPictureActionsBuilder():
@@ -395,7 +419,33 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener {
         return this.apply { setActions(pictureInPictureActions) }
     }
 
+    private fun isPictureInPictureSupported() =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+
+    private fun runPictureInPictureAction(actionName: String, action: () -> Unit) {
+        try {
+            action()
+        } catch (e: IllegalStateException) {
+            logPictureInPictureFailure(actionName, e)
+        } catch (e: UnsupportedOperationException) {
+            logPictureInPictureFailure(actionName, e)
+        } catch (e: IllegalArgumentException) {
+            logPictureInPictureFailure(actionName, e)
+        }
+    }
+
+    private fun logPictureInPictureFailure(actionName: String, exception: RuntimeException) {
+        if (pictureInPictureFailureActions.add(actionName)) {
+            Log.warning("[PiP] Failed to $actionName: ${exception.message}")
+        }
+    }
+
     fun buildPictureInPictureParams() {
+        if (!isPictureInPictureSupported()) {
+            return
+        }
+
         val pictureInPictureParamsBuilder = PictureInPictureParams.Builder()
             .getPictureInPictureActionsBuilder().getPictureInPictureAspectBuilder()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -405,7 +455,9 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener {
                 BooleanSetting.PICTURE_IN_PICTURE.getBoolean() && isEmulationActive
             )
         }
-        setPictureInPictureParams(pictureInPictureParamsBuilder.build())
+        runPictureInPictureAction("set picture-in-picture params") {
+            setPictureInPictureParams(pictureInPictureParamsBuilder.build())
+        }
     }
 
     private var pictureInPictureReceiver = object : BroadcastReceiver() {
@@ -493,6 +545,8 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener {
 
     companion object {
         const val EXTRA_SELECTED_GAME = "SelectedGame"
+        private val MIN_PICTURE_IN_PICTURE_ASPECT_RATIO = Rational(100, 239)
+        private val MAX_PICTURE_IN_PICTURE_ASPECT_RATIO = Rational(239, 100)
 
         fun launch(activity: AppCompatActivity, game: Game) {
             val launcher = Intent(activity, EmulationActivity::class.java)

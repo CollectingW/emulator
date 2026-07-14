@@ -3,6 +3,7 @@
 
 #include <cinttypes>
 #include <cstring>
+#include <exception>
 #include <vector>
 
 #include "common/common_funcs.h"
@@ -148,7 +149,10 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
 
     // Apply patches if necessary
     const auto name = nso_file.GetName();
-    if (pm && (pm->HasNSOPatch(nso_header.build_id, name) || Settings::values.dump_nso)) {
+    const bool has_nso_patch = pm && pm->HasNSOPatch(nso_header.build_id, name);
+    const bool should_patch_nso =
+        has_nso_patch || (load_into_process && Settings::values.dump_nso);
+    if (pm && should_patch_nso) {
         std::span<u8> patchable_section(program_image.data() + module_start,
                                         program_image.size() - module_start);
         std::vector<u8> pi_header(sizeof(NSOHeader) + patchable_section.size());
@@ -157,6 +161,21 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
                     patchable_section.size());
 
         pi_header = pm->PatchNSO(pi_header, name);
+
+        if (pi_header.size() < sizeof(NSOHeader)) {
+            LOG_ERROR(Loader, "Patched NSO is too small: module={}, patched_size={:#x}", name,
+                      pi_header.size());
+            return std::nullopt;
+        }
+
+        const auto patched_size = pi_header.size() - sizeof(NSOHeader);
+        if (patched_size != patchable_section.size()) {
+            LOG_ERROR(Loader,
+                      "Patched NSO size mismatch: module={}, original_size={:#x}, "
+                      "patched_size={:#x}",
+                      name, patchable_section.size(), patched_size);
+            return std::nullopt;
+        }
 
         std::copy(pi_header.begin() + sizeof(NSOHeader), pi_header.end(), patchable_section.data());
     }
@@ -172,7 +191,36 @@ std::optional<VAddr> AppLoader_NSO::LoadModule(Kernel::KProcess& process, Core::
         }
     } else if (patch) {
         // Relocate code patch and copy to the program_image.
-        if (patch->RelocateAndCopy(load_base, code, program_image, &process.GetPostHandlers())) {
+        const auto build_id = Common::HexToString(nso_header.build_id);
+        LOG_DEBUG(Loader,
+                  "NCE relocating NSO module: name={}, build_id={}, patch_index={}, mode={}, "
+                  "load_base={:#x}, image_size={:#x}, code_offset={:#x}, code_size={:#x}, "
+                  "patch_section_size={:#x}",
+                  name, build_id, patch_index, patch->GetPatchMode(), load_base,
+                  program_image.size(), code.offset, code.size, patch->GetSectionSize());
+
+        bool copied_patch_section;
+        try {
+            copied_patch_section =
+                patch->RelocateAndCopy(load_base, code, program_image, &process.GetPostHandlers());
+        } catch (const std::exception& ex) {
+            LOG_CRITICAL(Loader,
+                         "NCE failed while relocating NSO module: name={}, build_id={}, "
+                         "patch_index={}, mode={}, load_base={:#x}, image_size={:#x}, "
+                         "code_offset={:#x}, code_size={:#x}, patch_section_size={:#x}, "
+                         "exception={}",
+                         name, build_id, patch_index, patch->GetPatchMode(), load_base,
+                         program_image.size(), code.offset, code.size, patch->GetSectionSize(),
+                         ex.what());
+            throw;
+        }
+
+        LOG_DEBUG(Loader,
+                  "NCE relocated NSO module: name={}, build_id={}, patch_index={}, "
+                  "copied_patch_section={}, final_image_size={:#x}",
+                  name, build_id, patch_index, copied_patch_section, program_image.size());
+
+        if (copied_patch_section) {
             // Update patch section.
             auto& patch_segment = codeset.PatchSegment();
             patch_segment.addr =

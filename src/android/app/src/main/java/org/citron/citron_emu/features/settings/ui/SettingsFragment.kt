@@ -128,6 +128,17 @@ class SettingsFragment : Fragment() {
                 ).show(parentFragmentManager, MessageDialogFragment.TAG)
             }
         }
+        settingsViewModel.shouldShowDirectConnectDialog.collect(
+            viewLifecycleOwner,
+            resetState = { settingsViewModel.setShouldShowDirectConnectDialog(false) }
+        ) {
+            if (it) {
+                DirectConnectDialogFragment().show(
+                    parentFragmentManager,
+                    DirectConnectDialogFragment.TAG
+                )
+            }
+        }
 
         if (args.menuTag == Settings.MenuTag.SECTION_ROOT) {
             binding.toolbarSettings.inflateMenu(R.menu.menu_settings)

@@ -2,6 +2,8 @@
 // SPDX-FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "core/core.h"
@@ -476,7 +478,16 @@ void KPageTableBase::Finalize() {
 
     auto BlockCallback = [&](KProcessAddress addr, u64 size) {
         if (m_impl->fastmem_arena) {
-            m_system.DeviceMemory().buffer.Unmap(GetInteger(addr), size, false);
+            // Some platforms reserve a smaller fastmem arena than the full 39-bit process
+            // address space. The block manager still contains a trailing free block for
+            // that unreserved range when the process is finalized. It was never mapped,
+            // so do not pass it to HostMemory::Unmap.
+            const size_t virtual_offset = GetInteger(addr);
+            const size_t virtual_size = m_system.DeviceMemory().buffer.VirtualSize();
+            if (virtual_offset < virtual_size) {
+                const size_t mapped_size = std::min<size_t>(size, virtual_size - virtual_offset);
+                m_system.DeviceMemory().buffer.Unmap(virtual_offset, mapped_size, false);
+            }
         }
 
         // Get physical pages.

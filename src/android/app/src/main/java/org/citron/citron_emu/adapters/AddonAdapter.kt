@@ -4,6 +4,7 @@
 package org.citron.citron_emu.adapters
 
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
 import org.citron.citron_emu.databinding.ListItemAddonBinding
 import org.citron.citron_emu.model.Patch
@@ -25,10 +26,12 @@ class AddonAdapter(val addonViewModel: AddonViewModel) :
             }
             binding.title.text = model.name
             binding.version.text = model.version
+            binding.addonCheckbox.setOnCheckedChangeListener(null)
+            binding.addonCheckbox.isChecked = model.enabled
             binding.addonCheckbox.setOnCheckedChangeListener { _, checked ->
                 model.enabled = checked
             }
-            binding.addonCheckbox.isChecked = model.enabled
+            binding.buttonDelete.visibility = View.VISIBLE
             binding.buttonDelete.setOnClickListener {
                 addonViewModel.setAddonToDelete(model)
             }

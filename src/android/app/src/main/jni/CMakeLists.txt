@@ -17,7 +17,7 @@ add_library(citron-android SHARED
 
 set_property(TARGET citron-android PROPERTY IMPORTED_LOCATION ${FFmpeg_LIBRARY_DIR})
 
-target_link_libraries(citron-android PRIVATE audio_core common core input_common frontend_common Vulkan::Headers)
+target_link_libraries(citron-android PRIVATE audio_core common core input_common frontend_common network Vulkan::Headers)
 target_link_libraries(citron-android PRIVATE android camera2ndk EGL glad jnigraphics log)
 if (ARCHITECTURE_arm64)
     target_link_libraries(citron-android PRIVATE adrenotools)

@@ -251,7 +251,7 @@ void FunctionBrowserWidget::OnImportGhidraCsv() {
     std::string line;
     int count = 0;
     while (std::getline(f, line)) {
-        u64 addr;
+        u64 addr = 0;
         std::string name;
         if (ParseGhidraCsvLine(line, addr, name) && !name.empty()) {
             ghidra_import_overrides[addr] = name;

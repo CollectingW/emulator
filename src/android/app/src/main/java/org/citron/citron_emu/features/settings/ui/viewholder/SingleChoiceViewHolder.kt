@@ -6,6 +6,7 @@ package org.citron.citron_emu.features.settings.ui.viewholder
 import android.view.View
 import org.citron.citron_emu.databinding.ListItemSettingBinding
 import org.citron.citron_emu.features.settings.model.view.IntSingleChoiceSetting
+import org.citron.citron_emu.features.settings.model.view.LogFilterSetting
 import org.citron.citron_emu.features.settings.model.view.SettingsItem
 import org.citron.citron_emu.features.settings.model.view.SingleChoiceSetting
 import org.citron.citron_emu.features.settings.model.view.StringSingleChoiceSetting
@@ -37,6 +38,10 @@ class SingleChoiceViewHolder(val binding: ListItemSettingBinding, adapter: Setti
 
             is StringSingleChoiceSetting -> {
                 binding.textSettingValue.text = item.getSelectedValue()
+            }
+
+            is LogFilterSetting -> {
+                binding.textSettingValue.text = item.getDisplayValue()
             }
 
             is IntSingleChoiceSetting -> {
@@ -71,6 +76,10 @@ class SingleChoiceViewHolder(val binding: ListItemSettingBinding, adapter: Setti
                     setting as StringSingleChoiceSetting,
                     bindingAdapterPosition
                 )
+            }
+
+            is LogFilterSetting -> {
+                adapter.onLogFilterClick(setting as LogFilterSetting, bindingAdapterPosition)
             }
 
             is IntSingleChoiceSetting -> {

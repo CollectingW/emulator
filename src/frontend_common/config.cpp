@@ -1032,20 +1032,27 @@ void Config::WriteSettingGeneric(const Settings::BasicSetting* const setting) {
     }
 
     std::string key = AdjustKey(setting->GetLabel());
+    const bool is_log_filter = setting->GetLabel() == Settings::values.log_filter.GetLabel();
+    const auto canonicalize = [is_log_filter](std::string value) {
+        if (is_log_filter) {
+            return Common::Log::CanonicalizeFilterString(value);
+        }
+        return value;
+    };
+    const std::string default_value = canonicalize(setting->DefaultToString());
     if (setting->Switchable()) {
         if (!global) {
             WriteBooleanSetting(std::string(key).append("\\use_global"), setting->UsingGlobal());
         }
         if (global || !setting->UsingGlobal()) {
-            auto value = global ? setting->ToStringGlobal() : setting->ToString();
-            WriteBooleanSetting(std::string(key).append("\\default"),
-                                value == setting->DefaultToString());
+            auto value = canonicalize(global ? setting->ToStringGlobal() : setting->ToString());
+            WriteBooleanSetting(std::string(key).append("\\default"), value == default_value);
             WriteStringSetting(key, value);
         }
     } else if (global) {
-        WriteBooleanSetting(std::string(key).append("\\default"),
-                            setting->ToString() == setting->DefaultToString());
-        WriteStringSetting(key, setting->ToString());
+        auto value = canonicalize(setting->ToString());
+        WriteBooleanSetting(std::string(key).append("\\default"), value == default_value);
+        WriteStringSetting(key, value);
     }
 }
 

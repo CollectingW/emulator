@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include <array>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include "common/common_types.h"
 #include "core/file_sys/nca_metadata.h"
 #include "core/file_sys/vfs/vfs_types.h"
@@ -27,7 +29,7 @@ class ContentProvider;
 class NCA;
 class NACP;
 
-enum class PatchType { Update, DLC, Mod };
+enum class PatchType { Update, DLC, Mod, Cheat };
 
 struct Patch {
     bool enabled;
@@ -37,6 +39,17 @@ struct Patch {
     u64 program_id;
     u64 title_id;
 };
+
+struct CheatPatch {
+    bool enabled;
+    std::string name;
+    std::string build_id;
+    std::string source;
+};
+
+[[nodiscard]] std::string NormalizeCheatBuildId(std::string build_id);
+[[nodiscard]] std::string GetCheatBuildId(const std::array<u8, 0x20>& build_id);
+[[nodiscard]] std::string GetCheatConfigKey(std::string_view source, std::string_view name);
 
 // A centralized class to manage patches to games.
 class PatchManager {
@@ -80,6 +93,12 @@ public:
     // Returns a vector of patches
     [[nodiscard]] std::vector<Patch> GetPatches(VirtualFile update_raw = nullptr) const;
 
+    // Returns a vector of cheats found in mod directories.
+    [[nodiscard]] std::vector<CheatPatch> GetCheats() const;
+
+    // Returns a vector of cheats found in one installed mod directory.
+    [[nodiscard]] std::vector<CheatPatch> GetCheatsForMod(std::string_view mod_name) const;
+
     // If the game update exists, returns the u32 version field in its Meta-type NCA. If that fails,
     // it will fallback to the Meta-type NCA of the base game. If that fails, the result will be
     // std::nullopt
@@ -92,15 +111,19 @@ public:
     // Version of GetControlMetadata that takes an arbitrary NCA
     [[nodiscard]] Metadata ParseControlNCA(const NCA& nca) const;
 
-private:
     struct ActiveUpdate {
         u32 version = 0;
         bool found = false;
         bool is_external = false;
     };
+
+    // Resolves the highest-versioned, non-disabled update for this title across
+    // NAND and External providers. Used by GetPatches/PatchExeFS/PatchRomFS
+    // internally, and by the loader (core/loader/nca.cpp) for sparse-base titles
+    // whose ExeFS lives entirely in the update NCA rather than the base NCA.
     [[nodiscard]] ActiveUpdate GetActiveUpdate() const;
 
-    [[nodiscard]] VirtualFile FindAutoloaderNCA(ContentRecordType type) const;
+private:
     [[nodiscard]] std::vector<VirtualFile> CollectPatches(const std::vector<VirtualDir>& patch_dirs,
                                                           const std::string& build_id) const;
 

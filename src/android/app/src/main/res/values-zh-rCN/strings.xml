@@ -39,7 +39,7 @@
     <string name="home_search_games">搜索游戏</string>
     <string name="search_settings">搜索设置</string>
     <string name="games_dir_selected">已选择游戏文件夹</string>
-    <string name="install_prod_keys">安装 prod.keys 文件</string>
+    <string name="install_prod_keys">安装 prod / titles.keys 文件</string>
     <string name="install_prod_keys_description">需要密钥文件来解密游戏</string>
     <string name="install_prod_keys_warning">跳过添加密钥文件？</string>
     <string name="install_prod_keys_warning_description">对于商业游戏，需要有效的密钥文件才能运行。如果没有密钥文件，将只能运行自制软件。</string>

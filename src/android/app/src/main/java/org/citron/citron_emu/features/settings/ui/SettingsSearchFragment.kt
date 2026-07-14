@@ -136,7 +136,7 @@ class SettingsSearchFragment : Fragment() {
         binding.searchText.requestFocus()
         val imm = requireActivity()
             .getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager?
-        imm?.showSoftInput(binding.searchText, InputMethodManager.SHOW_IMPLICIT)
+        imm?.showSoftInput(binding.searchText, 0)
     }
 
     private fun setInsets() =

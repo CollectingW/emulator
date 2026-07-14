@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <algorithm>
+#include <optional>
 #include <set>
 #include <common/settings_input.h>
 #include <common/thread.h>
@@ -30,8 +32,23 @@ void Android::RegisterController(jobject j_input_device) {
         env, static_cast<jstring>(
                  env->CallObjectMethod(j_input_device, Common::Android::GetCitronDeviceGetGUID())));
     const s32 port = env->CallIntMethod(j_input_device, Common::Android::GetCitronDeviceGetPort());
+    if (port < 0) {
+        return;
+    }
+
     const auto identifier = GetIdentifier(guid, static_cast<size_t>(port));
     PreSetController(identifier);
+
+    std::scoped_lock lock{input_devices_mutex};
+    const auto previous_identifier = port_identifiers.find(static_cast<size_t>(port));
+    if (previous_identifier != port_identifiers.end() && previous_identifier->second != identifier) {
+        const auto previous_device = input_devices.find(previous_identifier->second);
+        if (previous_device != input_devices.end()) {
+            env->DeleteGlobalRef(previous_device->second);
+            input_devices.erase(previous_device);
+        }
+    }
+    port_identifiers[static_cast<size_t>(port)] = identifier;
 
     if (input_devices.find(identifier) != input_devices.end()) {
         env->DeleteGlobalRef(input_devices[identifier]);
@@ -40,14 +57,56 @@ void Android::RegisterController(jobject j_input_device) {
     input_devices[identifier] = new_device;
 }
 
+void Android::ClearControllers() {
+    auto env = Common::Android::GetEnvForThread();
+    std::scoped_lock lock{input_devices_mutex};
+    for (const auto& [identifier, device] : input_devices) {
+        env->DeleteGlobalRef(device);
+    }
+    input_devices.clear();
+    port_identifiers.clear();
+}
+
 void Android::SetButtonState(std::string guid, size_t port, int button_id, bool value) {
     const auto identifier = GetIdentifier(guid, port);
     SetButton(identifier, button_id, value);
 }
 
+void Android::SetButtonState(size_t port, int button_id, bool value) {
+    std::optional<PadIdentifier> pad_identifier;
+    {
+        std::scoped_lock lock{input_devices_mutex};
+        const auto identifier = port_identifiers.find(port);
+        if (identifier == port_identifiers.end()) {
+            return;
+        }
+        pad_identifier = identifier->second;
+    }
+
+    SetButton(*pad_identifier, button_id, value);
+}
+
 void Android::SetAxisPosition(std::string guid, size_t port, int axis_id, float value) {
     const auto identifier = GetIdentifier(guid, port);
     SetAxis(identifier, axis_id, value);
+}
+
+void Android::SetAxisPositions(size_t port, std::span<const int> axis_ids,
+                               std::span<const float> values) {
+    std::optional<PadIdentifier> pad_identifier;
+    {
+        std::scoped_lock lock{input_devices_mutex};
+        const auto identifier = port_identifiers.find(port);
+        if (identifier == port_identifiers.end()) {
+            return;
+        }
+        pad_identifier = identifier->second;
+    }
+
+    const size_t count = std::min(axis_ids.size(), values.size());
+    for (size_t i = 0; i < count; ++i) {
+        SetAxis(*pad_identifier, axis_ids[i], values[i]);
+    }
 }
 
 void Android::SetMotionState(std::string guid, size_t port, u64 delta_timestamp, float gyro_x,
@@ -77,6 +136,7 @@ Common::Input::DriverResult Android::SetVibration(
 }
 
 bool Android::IsVibrationEnabled([[maybe_unused]] const PadIdentifier& identifier) {
+    std::scoped_lock lock{input_devices_mutex};
     auto device = input_devices.find(identifier);
     if (device != input_devices.end()) {
         return Common::Android::RunJNIOnFiber<bool>([&](JNIEnv* env) {
@@ -90,6 +150,7 @@ bool Android::IsVibrationEnabled([[maybe_unused]] const PadIdentifier& identifie
 std::vector<Common::ParamPackage> Android::GetInputDevices() const {
     std::vector<Common::ParamPackage> devices;
     auto env = Common::Android::GetEnvForThread();
+    std::scoped_lock lock{input_devices_mutex};
     for (const auto& [key, value] : input_devices) {
         auto name_object = static_cast<jstring>(
             env->CallObjectMethod(value, Common::Android::GetCitronDeviceGetName()));
@@ -172,13 +233,17 @@ AnalogMapping Android::GetAnalogMappingForDevice(const Common::ParamPackage& par
 
     auto identifier =
         GetIdentifier(params.Get("guid", ""), static_cast<size_t>(params.Get("port", 0)));
-    auto& j_device = input_devices[identifier];
-    if (j_device == nullptr) {
-        return {};
-    }
+    std::set<s32> axes;
+    {
+        std::scoped_lock lock{input_devices_mutex};
+        const auto device = input_devices.find(identifier);
+        if (device == input_devices.end() || device->second == nullptr) {
+            return {};
+        }
 
-    auto env = Common::Android::GetEnvForThread();
-    std::set<s32> axes = GetDeviceAxes(env, j_device);
+        auto env = Common::Android::GetEnvForThread();
+        axes = GetDeviceAxes(env, device->second);
+    }
     if (axes.size() == 0) {
         return {};
     }
@@ -206,28 +271,32 @@ ButtonMapping Android::GetButtonMappingForDevice(const Common::ParamPackage& par
 
     auto identifier =
         GetIdentifier(params.Get("guid", ""), static_cast<size_t>(params.Get("port", 0)));
-    auto& j_device = input_devices[identifier];
-    if (j_device == nullptr) {
-        return {};
-    }
-
-    auto env = Common::Android::GetEnvForThread();
-    jintArray j_keys = env->NewIntArray(static_cast<int>(keycode_ids.size()));
-    env->SetIntArrayRegion(j_keys, 0, static_cast<int>(keycode_ids.size()), keycode_ids.data());
-    auto j_has_keys_object = static_cast<jbooleanArray>(
-        env->CallObjectMethod(j_device, Common::Android::GetCitronDeviceHasKeys(), j_keys));
-    jboolean isCopy = false;
-    jboolean* j_has_keys = env->GetBooleanArrayElements(j_has_keys_object, &isCopy);
-
     std::set<s32> available_keys;
-    for (size_t i = 0; i < keycode_ids.size(); ++i) {
-        if (j_has_keys[i]) {
-            available_keys.insert(keycode_ids[i]);
+    std::set<s32> axes;
+    {
+        std::scoped_lock lock{input_devices_mutex};
+        const auto device = input_devices.find(identifier);
+        if (device == input_devices.end() || device->second == nullptr) {
+            return {};
         }
-    }
 
-    // Some devices use axes instead of buttons for certain controls so we need all the axes here
-    std::set<s32> axes = GetDeviceAxes(env, j_device);
+        auto env = Common::Android::GetEnvForThread();
+        jintArray j_keys = env->NewIntArray(static_cast<int>(keycode_ids.size()));
+        env->SetIntArrayRegion(j_keys, 0, static_cast<int>(keycode_ids.size()), keycode_ids.data());
+        auto j_has_keys_object = static_cast<jbooleanArray>(
+            env->CallObjectMethod(device->second, Common::Android::GetCitronDeviceHasKeys(), j_keys));
+        jboolean isCopy = false;
+        jboolean* j_has_keys = env->GetBooleanArrayElements(j_has_keys_object, &isCopy);
+        for (size_t i = 0; i < keycode_ids.size(); ++i) {
+            if (j_has_keys[i]) {
+                available_keys.insert(keycode_ids[i]);
+            }
+        }
+        env->ReleaseBooleanArrayElements(j_has_keys_object, j_has_keys, JNI_ABORT);
+
+        // Some devices use axes instead of buttons for certain controls so we need all the axes here
+        axes = GetDeviceAxes(env, device->second);
+    }
 
     ButtonMapping mapping = {};
     if (axes.find(AXIS_HAT_X) != axes.end() && axes.find(AXIS_HAT_Y) != axes.end()) {
@@ -355,6 +424,7 @@ PadIdentifier Android::GetIdentifier(const std::string& guid, size_t port) const
 
 void Android::SendVibrations(JNIEnv* env, std::stop_token token) {
     VibrationRequest request = vibration_queue.PopWait(token);
+    std::scoped_lock lock{input_devices_mutex};
     auto device = input_devices.find(request.identifier);
     if (device != input_devices.end()) {
         float average_intensity = static_cast<float>(

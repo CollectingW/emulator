@@ -70,6 +70,7 @@ class MainActivity : AppCompatActivity(), ThemeProvider {
         ThemeHelper.setTheme(this)
 
         super.onCreate(savedInstanceState)
+        DisplayModeUtil.preferHighestRefreshRate(this)
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
@@ -89,8 +90,10 @@ class MainActivity : AppCompatActivity(), ThemeProvider {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
 
+        @Suppress("DEPRECATION")
         window.statusBarColor =
             ContextCompat.getColor(applicationContext, android.R.color.transparent)
+        @Suppress("DEPRECATION")
         window.navigationBarColor =
             ContextCompat.getColor(applicationContext, android.R.color.transparent)
 
@@ -208,8 +211,8 @@ class MainActivity : AppCompatActivity(), ThemeProvider {
                         binding.navigationView.height.toFloat() * 2
                     translationY(0f)
                 } else {
-                    if (ViewCompat.getLayoutDirection(binding.navigationView) ==
-                        ViewCompat.LAYOUT_DIRECTION_LTR
+                    if (binding.navigationView.layoutDirection ==
+                        View.LAYOUT_DIRECTION_LTR
                     ) {
                         binding.navigationView.translationX =
                             binding.navigationView.width.toFloat() * -2
@@ -227,8 +230,8 @@ class MainActivity : AppCompatActivity(), ThemeProvider {
                 if (smallLayout) {
                     translationY(binding.navigationView.height.toFloat() * 2)
                 } else {
-                    if (ViewCompat.getLayoutDirection(binding.navigationView) ==
-                        ViewCompat.LAYOUT_DIRECTION_LTR
+                    if (binding.navigationView.layoutDirection ==
+                        View.LAYOUT_DIRECTION_LTR
                     ) {
                         translationX(binding.navigationView.width.toFloat() * -2)
                     } else {
@@ -342,10 +345,14 @@ class MainActivity : AppCompatActivity(), ThemeProvider {
         )
 
         val dstPath = DirectoryInitialization.userDirectory + "/keys/"
+        val dstFilename = when (FileUtil.getFilename(result).lowercase()) {
+            "title.keys" -> "title.keys"
+            else -> "prod.keys"
+        }
         if (FileUtil.copyUriToInternalStorage(
                 result,
                 dstPath,
-                "prod.keys"
+                dstFilename
             ) != null
         ) {
             if (NativeLibrary.reloadKeys()) {
@@ -681,8 +688,8 @@ class MainActivity : AppCompatActivity(), ThemeProvider {
                 }
 
                 // Reinitialize relevant data
-                NativeLibrary.initializeSystem(true)
                 NativeConfig.initializeGlobalConfig()
+                NativeLibrary.initializeSystem(true)
                 gamesViewModel.reloadGames(false)
                 driverViewModel.reloadDriverData()
 

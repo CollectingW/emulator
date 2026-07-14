@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cinttypes>
+#include <cstring>
 #include <memory>
 
+#include "common/assert.h"
+#include "common/logging.h"
 #include "common/signal_chain.h"
 #include "core/arm/nce/arm_nce.h"
 #include "core/arm/nce/interpreter_visitor.h"
@@ -24,6 +27,57 @@ namespace {
 struct sigaction g_orig_bus_action;
 struct sigaction g_orig_segv_action;
 
+template <typename Callback>
+void InvokeOriginalActionWithMask(int sig, const struct sigaction& original, Callback&& callback) {
+    sigset_t callback_mask = original.sa_mask;
+    sigset_t previous_mask;
+
+    if ((original.sa_flags & SA_NODEFER) == 0) {
+        sigaddset(&callback_mask, sig);
+    }
+
+    sigprocmask(SIG_BLOCK, &callback_mask, &previous_mask);
+
+    if ((original.sa_flags & SA_NODEFER) != 0) {
+        sigset_t nodefer_mask;
+        sigemptyset(&nodefer_mask);
+        sigaddset(&nodefer_mask, sig);
+        sigprocmask(SIG_UNBLOCK, &nodefer_mask, nullptr);
+    }
+
+    callback();
+    sigprocmask(SIG_SETMASK, &previous_mask, nullptr);
+}
+
+void ForwardSignalToOriginalAction(int sig, siginfo_t* info, void* raw_context,
+                                   const struct sigaction& original) {
+    if (original.sa_handler == SIG_IGN) {
+        return;
+    }
+
+    if (original.sa_handler == SIG_DFL) {
+        Common::SigAction(sig, &original, nullptr);
+        syscall(SYS_tkill, gettid(), sig);
+        return;
+    }
+
+    if ((original.sa_flags & SA_SIGINFO) != 0 && original.sa_sigaction != nullptr) {
+        InvokeOriginalActionWithMask(sig, original,
+                                     [&] { original.sa_sigaction(sig, info, raw_context); });
+        return;
+    }
+
+    if ((original.sa_flags & SA_SIGINFO) == 0 && original.sa_handler != nullptr) {
+        InvokeOriginalActionWithMask(sig, original, [&] { original.sa_handler(sig); });
+        return;
+    }
+
+    struct sigaction default_action {};
+    default_action.sa_handler = SIG_DFL;
+    Common::SigAction(sig, &default_action, nullptr);
+    syscall(SYS_tkill, gettid(), sig);
+}
+
 // Verify assembly offsets.
 using NativeExecutionParameters = Kernel::KThread::NativeExecutionParameters;
 static_assert(offsetof(NativeExecutionParameters, native_context) == TpidrEl0NativeContext);
@@ -31,11 +85,43 @@ static_assert(offsetof(NativeExecutionParameters, lock) == TpidrEl0Lock);
 static_assert(offsetof(NativeExecutionParameters, magic) == TpidrEl0TlsMagic);
 
 fpsimd_context* GetFloatingPointState(mcontext_t& host_ctx) {
-    _aarch64_ctx* header = reinterpret_cast<_aarch64_ctx*>(&host_ctx.__reserved);
-    while (header->magic != FPSIMD_MAGIC) {
-        header = reinterpret_cast<_aarch64_ctx*>(reinterpret_cast<char*>(header) + header->size);
+    auto* const begin = reinterpret_cast<char*>(&host_ctx.__reserved);
+    auto* const end = begin + sizeof(host_ctx.__reserved);
+
+    for (auto* ptr = begin; ptr + sizeof(_aarch64_ctx) <= end;) {
+        auto* header = reinterpret_cast<_aarch64_ctx*>(ptr);
+
+        if (header->magic == FPSIMD_MAGIC) {
+            if (header->size >= sizeof(fpsimd_context) &&
+                static_cast<size_t>(end - ptr) >= sizeof(fpsimd_context)) {
+                return reinterpret_cast<fpsimd_context*>(header);
+            }
+
+            LOG_CRITICAL(Core_ARM,
+                         "Malformed NCE signal frame FPSIMD context: size={:#x}, "
+                         "remaining={:#x}",
+                         header->size, static_cast<size_t>(end - ptr));
+            return nullptr;
+        }
+
+        if (header->magic == 0 && header->size == 0) {
+            break;
+        }
+
+        if (header->size < sizeof(_aarch64_ctx) ||
+            header->size > static_cast<size_t>(end - ptr)) {
+            LOG_CRITICAL(Core_ARM,
+                         "Malformed NCE signal frame context entry: magic={:#x}, size={:#x}, "
+                         "remaining={:#x}",
+                         header->magic, header->size, static_cast<size_t>(end - ptr));
+            return nullptr;
+        }
+
+        ptr += header->size;
     }
-    return reinterpret_cast<fpsimd_context*>(header);
+
+    LOG_CRITICAL(Core_ARM, "NCE signal frame is missing FPSIMD context");
+    return nullptr;
 }
 
 using namespace Common::Literals;
@@ -53,6 +139,9 @@ void* ArmNce::RestoreGuestContext(void* raw_context) {
 
     // Retrieve the host floating point state.
     auto* fpctx = GetFloatingPointState(host_ctx);
+    if (fpctx == nullptr) {
+        UNREACHABLE_MSG("NCE cannot restore guest context without FPSIMD signal state");
+    }
 
     // Save host callee-saved registers.
     std::memcpy(guest_ctx->host_ctx.host_saved_vregs.data(), &fpctx->vregs[8],
@@ -82,6 +171,9 @@ void ArmNce::SaveGuestContext(GuestContext* guest_ctx, void* raw_context) {
 
     // Retrieve the host floating point state.
     auto* fpctx = GetFloatingPointState(host_ctx);
+    if (fpctx == nullptr) {
+        UNREACHABLE_MSG("NCE cannot save guest context without FPSIMD signal state");
+    }
 
     // Save all guest registers except tpidr_el0.
     std::memcpy(guest_ctx->cpu_registers.data(), host_ctx.regs, sizeof(host_ctx.regs));
@@ -116,13 +208,15 @@ bool ArmNce::HandleFailedGuestFault(GuestContext* guest_ctx, void* raw_info, voi
     const bool is_prefetch_abort = host_ctx.pc == reinterpret_cast<u64>(info->si_addr);
 
     // For data aborts, skip the instruction and return to guest code.
-    // This will allow games to continue in many scenarios where they would otherwise crash.
+    // This preserves the historical NCE behavior while branch relocation fallback is tested.
     if (!is_prefetch_abort) {
         host_ctx.pc += 4;
         return true;
     }
 
     // This is a prefetch abort.
+    LOG_CRITICAL(Core_ARM, "Unhandled NCE prefetch abort: pc={:#x}, fault_addr={:#x}",
+                 host_ctx.pc, reinterpret_cast<u64>(info->si_addr));
     guest_ctx->esr_el1.fetch_or(static_cast<u64>(HaltReason::PrefetchAbort));
 
     // Forcibly mark the context as locked. We are still running.
@@ -141,6 +235,9 @@ bool ArmNce::HandleFailedGuestFault(GuestContext* guest_ctx, void* raw_info, voi
 bool ArmNce::HandleGuestAlignmentFault(GuestContext* guest_ctx, void* raw_info, void* raw_context) {
     auto& host_ctx = static_cast<ucontext_t*>(raw_context)->uc_mcontext;
     auto* fpctx = GetFloatingPointState(host_ctx);
+    if (fpctx == nullptr) {
+        UNREACHABLE_MSG("NCE cannot handle guest alignment fault without FPSIMD signal state");
+    }
     auto& memory = guest_ctx->system->ApplicationMemory();
 
     // Match and execute an instruction.
@@ -171,11 +268,13 @@ bool ArmNce::HandleGuestAccessFault(GuestContext* guest_ctx, void* raw_info, voi
 }
 
 void ArmNce::HandleHostAlignmentFault(int sig, void* raw_info, void* raw_context) {
-    return g_orig_bus_action.sa_sigaction(sig, static_cast<siginfo_t*>(raw_info), raw_context);
+    ForwardSignalToOriginalAction(sig, static_cast<siginfo_t*>(raw_info), raw_context,
+                                  g_orig_bus_action);
 }
 
 void ArmNce::HandleHostAccessFault(int sig, void* raw_info, void* raw_context) {
-    return g_orig_segv_action.sa_sigaction(sig, static_cast<siginfo_t*>(raw_info), raw_context);
+    ForwardSignalToOriginalAction(sig, static_cast<siginfo_t*>(raw_info), raw_context,
+                                  g_orig_segv_action);
 }
 
 void ArmNce::LockThread(Kernel::KThread* thread) {
@@ -302,7 +401,7 @@ void ArmNce::Initialize() {
         alignment_fault_action.sa_sigaction =
             reinterpret_cast<HandlerType>(&ArmNce::GuestAlignmentFaultSignalHandler);
         alignment_fault_action.sa_mask = signal_mask;
-        Common::SigAction(GuestAlignmentFaultSignal, &alignment_fault_action, nullptr);
+        Common::SigAction(GuestAlignmentFaultSignal, &alignment_fault_action, &g_orig_bus_action);
 
         struct sigaction access_fault_action {};
         access_fault_action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESTART;

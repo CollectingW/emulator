@@ -93,6 +93,7 @@ class SetupFragment : Fragment() {
             }
         )
 
+        @Suppress("DEPRECATION")
         requireActivity().window.navigationBarColor =
             ContextCompat.getColor(requireContext(), android.R.color.transparent)
 

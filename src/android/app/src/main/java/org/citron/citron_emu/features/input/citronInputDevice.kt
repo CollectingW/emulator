@@ -30,6 +30,11 @@ class CitronPhysicalDevice(
     private val port: Int,
     useSystemVibrator: Boolean
 ) : CitronInputDevice {
+    private val guid = device.getGUID()
+    private val motionRanges = device.motionRanges.toList()
+    private val axes = motionRanges.map { it.axis }.toIntArray()
+    private val axesBySource = mutableMapOf<Int, IntArray>()
+
     private val vibrator = if (useSystemVibrator) {
         CitronVibrator.getSystemVibrator()
     } else {
@@ -41,7 +46,7 @@ class CitronPhysicalDevice(
     }
 
     override fun getGUID(): String {
-        return device.getGUID()
+        return guid
     }
 
     override fun getPort(): Int {
@@ -56,7 +61,17 @@ class CitronPhysicalDevice(
         vibrator.vibrate(intensity)
     }
 
-    override fun getAxes(): Array<Int> = device.motionRanges.map { it.axis }.toTypedArray()
+    fun getAxesForSource(source: Int): IntArray =
+        axesBySource.getOrPut(source) {
+            val filteredAxes = motionRanges
+                .filter { (it.source and source) == source }
+                .map { it.axis }
+                .toIntArray()
+
+            if (filteredAxes.isNotEmpty()) filteredAxes else axes
+        }
+
+    override fun getAxes(): Array<Int> = axes.toTypedArray()
     override fun hasKeys(keys: IntArray): BooleanArray = device.hasKeys(*keys)
 }
 

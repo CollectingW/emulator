@@ -69,8 +69,8 @@
     </string-array>
 
     <integer-array name="rendererApiValues">
+        <item>0</item>
         <item>1</item>
-        <item>2</item>
     </integer-array>
 
     <string-array name="rendererAccuracyNames">

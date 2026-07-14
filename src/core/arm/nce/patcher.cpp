@@ -4,6 +4,7 @@
 #include "common/arm64/native_clock.h"
 #include "common/bit_cast.h"
 #include "common/literals.h"
+#include "common/logging.h"
 #include "core/arm/nce/arm_nce.h"
 #include "core/arm/nce/guest_context.h"
 #include "core/arm/nce/instructions.h"
@@ -20,6 +21,9 @@ using namespace oaknut::util;
 using NativeExecutionParameters = Kernel::KThread::NativeExecutionParameters;
 
 constexpr size_t MaxRelativeBranch = 128_MiB;
+constexpr ptrdiff_t MinRelativeBranchOffset = -static_cast<ptrdiff_t>(MaxRelativeBranch);
+constexpr ptrdiff_t MaxRelativeBranchOffset =
+    static_cast<ptrdiff_t>(MaxRelativeBranch) - sizeof(u32);
 constexpr u32 ModuleCodeIndex = 0x24 / sizeof(u32);
 
 Patcher::Patcher() : c(m_patch_instructions) {
@@ -38,6 +42,35 @@ Patcher::Patcher() : c(m_patch_instructions) {
 
 Patcher::~Patcher() = default;
 
+bool Patcher::IsValidBranchOffset(ptrdiff_t offset) noexcept {
+    return offset >= MinRelativeBranchOffset && offset <= MaxRelativeBranchOffset &&
+           offset % sizeof(u32) == 0;
+}
+
+ptrdiff_t Patcher::CalculateBranchToPatchOffset(PatchMode patch_mode, size_t patch_size,
+                                                size_t remaining_program_size,
+                                                const Relocation& rel) noexcept {
+    if (patch_mode == PatchMode::PreText) {
+        return rel.patch_offset - static_cast<ptrdiff_t>(patch_size) -
+               static_cast<ptrdiff_t>(rel.module_offset);
+    }
+
+    return static_cast<ptrdiff_t>(remaining_program_size) -
+           static_cast<ptrdiff_t>(rel.module_offset) + rel.patch_offset;
+}
+
+ptrdiff_t Patcher::CalculateBranchToModuleOffset(PatchMode patch_mode, size_t patch_size,
+                                                 size_t remaining_program_size,
+                                                 const Relocation& rel) noexcept {
+    if (patch_mode == PatchMode::PreText) {
+        return static_cast<ptrdiff_t>(patch_size) - rel.patch_offset +
+               static_cast<ptrdiff_t>(rel.module_offset);
+    }
+
+    return static_cast<ptrdiff_t>(rel.module_offset) -
+           static_cast<ptrdiff_t>(remaining_program_size) - rel.patch_offset;
+}
+
 bool Patcher::PatchText(const Kernel::PhysicalMemory& program_image,
                         const Kernel::CodeSet::Segment& code) {
     // If we have patched modules but cannot reach the new module, then it needs its own patcher.
@@ -49,6 +82,7 @@ bool Patcher::PatchText(const Kernel::PhysicalMemory& program_image,
     // Add a new module patch to our list
     modules.emplace_back();
     curr_patch = &modules.back();
+    curr_patch->image_size = image_size;
 
     // The first word of the patch section is always a branch to the first instruction of the
     // module.
@@ -116,6 +150,10 @@ bool Patcher::PatchText(const Kernel::PhysicalMemory& program_image,
     // Determine patching mode for the final relocation step
     total_program_size += image_size;
     this->mode = image_size > MaxRelativeBranch ? PatchMode::PreText : PatchMode::PostData;
+    if (mode == PatchMode::PreText) {
+        ASSERT(modules.size() == 1);
+        ASSERT(total_program_size == image_size);
+    }
     return true;
 }
 
@@ -131,22 +169,43 @@ bool Patcher::RelocateAndCopy(Common::ProcessAddress load_base,
     const auto text_words =
         std::span<u32>{reinterpret_cast<u32*>(text.data()), text.size() / sizeof(u32)};
 
+    const auto LogBranchRelocation = [&](const char* kind, ptrdiff_t branch_offset,
+                                         const Relocation& rel) {
+        if (IsValidBranchOffset(branch_offset)) {
+            return;
+        }
+
+        LOG_CRITICAL(Core_ARM,
+                     "NCE branch relocation is outside AArch64 B range: kind={}, mode={}, "
+                     "relocate_module={}, modules={}, branch_offset={:#x}, valid_range=[{:#x}, "
+                     "{:#x}], patch_offset={:#x}, module_offset={:#x}, patch_size={:#x}, "
+                     "image_size={:#x}, total_program_size={:#x}, load_base={:#x}",
+                     kind, mode, m_relocate_module_index, modules.size(), branch_offset,
+                     MinRelativeBranchOffset, MaxRelativeBranchOffset, rel.patch_offset,
+                     rel.module_offset, patch_size, image_size, total_program_size,
+                     GetInteger(load_base));
+    };
+
     const auto ApplyBranchToPatchRelocation = [&](u32* target, const Relocation& rel) {
         oaknut::CodeGenerator rc{target};
-        if (mode == PatchMode::PreText) {
-            rc.B(rel.patch_offset - patch_size - rel.module_offset);
-        } else {
-            rc.B(total_program_size - rel.module_offset + rel.patch_offset);
+        const ptrdiff_t branch_offset =
+            CalculateBranchToPatchOffset(mode, patch_size, total_program_size, rel);
+        LogBranchRelocation("module_to_patch", branch_offset, rel);
+        if (!IsValidBranchOffset(branch_offset)) {
+            UNREACHABLE_MSG("NCE branch relocation must be validated before RelocateAndCopy");
         }
+        rc.B(branch_offset);
     };
 
     const auto ApplyBranchToModuleRelocation = [&](u32* target, const Relocation& rel) {
         oaknut::CodeGenerator rc{target};
-        if (mode == PatchMode::PreText) {
-            rc.B(patch_size - rel.patch_offset + rel.module_offset);
-        } else {
-            rc.B(rel.module_offset - total_program_size - rel.patch_offset);
+        const ptrdiff_t branch_offset =
+            CalculateBranchToModuleOffset(mode, patch_size, total_program_size, rel);
+        LogBranchRelocation("patch_to_module", branch_offset, rel);
+        if (!IsValidBranchOffset(branch_offset)) {
+            UNREACHABLE_MSG("NCE branch relocation must be validated before RelocateAndCopy");
         }
+        rc.B(branch_offset);
     };
 
     const auto RebasePatch = [&](ptrdiff_t patch_offset) {
@@ -166,7 +225,10 @@ bool Patcher::RelocateAndCopy(Common::ProcessAddress load_base,
     };
 
     // We are now ready to relocate!
-    auto& patch = modules[m_relocate_module_index++];
+    ASSERT(m_relocate_module_index < modules.size());
+    const size_t module_index = m_relocate_module_index++;
+    auto& patch = modules[module_index];
+    const size_t module_image_size = patch.image_size;
     for (const Relocation& rel : patch.m_branch_to_patch_relocations) {
         ApplyBranchToPatchRelocation(text_words.data() + rel.module_offset / sizeof(u32), rel);
     }
@@ -193,12 +255,24 @@ bool Patcher::RelocateAndCopy(Common::ProcessAddress load_base,
 
     // Remove the patched module size from the total. This is done so total_program_size
     // always represents the distance from the currently patched module to the patch section.
-    total_program_size -= image_size;
+    total_program_size -= module_image_size;
 
     // Only copy to the program image of the last module
     if (m_relocate_module_index == modules.size()) {
         if (this->mode == PatchMode::PreText) {
-            ASSERT(image_size == total_program_size);
+            const size_t expected_image_size = module_image_size + patch_size;
+            if (image_size != expected_image_size || total_program_size != 0) {
+                LOG_CRITICAL(Core_ARM,
+                             "NCE PreText final copy state mismatch: image_size={:#x}, "
+                             "expected_image_size={:#x}, module_image_size={:#x}, "
+                             "total_program_size={:#x}, patch_size={:#x}, relocate_module={}, "
+                             "modules={}, load_base={:#x}",
+                             image_size, expected_image_size, module_image_size,
+                             total_program_size, patch_size, m_relocate_module_index,
+                             modules.size(), GetInteger(load_base));
+            }
+            ASSERT(image_size == expected_image_size);
+            ASSERT(total_program_size == 0);
             std::memcpy(program_image.data(), m_patch_instructions.data(),
                         m_patch_instructions.size() * sizeof(u32));
         } else {
@@ -214,6 +288,80 @@ bool Patcher::RelocateAndCopy(Common::ProcessAddress load_base,
 
 size_t Patcher::GetSectionSize() const noexcept {
     return Common::AlignUp(m_patch_instructions.size() * sizeof(u32), Core::Memory::CITRON_PAGESIZE);
+}
+
+bool Patcher::CanRelocateBranches() const noexcept {
+    if (modules.empty() || mode == PatchMode::None) {
+        LOG_WARNING(Core_ARM,
+                    "NCE branch relocation preflight called without patched modules: mode={}, "
+                    "modules={}, total_program_size={:#x}",
+                    mode, modules.size(), total_program_size);
+        return false;
+    }
+
+    const size_t patch_size = GetSectionSize();
+
+    const auto LogInvalidBranch = [&](const char* kind, size_t module_index,
+                                      size_t remaining_program_size,
+                                      const Relocation& rel, ptrdiff_t branch_offset) {
+        LOG_WARNING(Core_ARM,
+                    "NCE branch relocation preflight failed: kind={}, mode={}, "
+                    "relocate_module={}, modules={}, branch_offset={:#x}, valid_range=[{:#x}, "
+                    "{:#x}], patch_offset={:#x}, module_offset={:#x}, patch_size={:#x}, "
+                    "image_size={:#x}, total_program_size={:#x}",
+                    kind, mode, module_index, modules.size(), branch_offset,
+                    MinRelativeBranchOffset, MaxRelativeBranchOffset, rel.patch_offset,
+                    rel.module_offset, patch_size, modules[module_index].image_size,
+                    remaining_program_size);
+    };
+
+    size_t remaining_program_size = total_program_size;
+    for (size_t module_index = 0; module_index < modules.size(); module_index++) {
+        const auto& patch = modules[module_index];
+        if (patch.image_size > remaining_program_size) {
+            LOG_WARNING(Core_ARM,
+                        "NCE branch relocation preflight size state mismatch: mode={}, "
+                        "relocate_module={}, modules={}, image_size={:#x}, "
+                        "remaining_program_size={:#x}, total_program_size={:#x}",
+                        mode, module_index, modules.size(), patch.image_size,
+                        remaining_program_size, total_program_size);
+            return false;
+        }
+
+        for (const Relocation& rel : patch.m_branch_to_patch_relocations) {
+            const ptrdiff_t branch_offset =
+                CalculateBranchToPatchOffset(mode, patch_size, remaining_program_size, rel);
+
+            if (!IsValidBranchOffset(branch_offset)) {
+                LogInvalidBranch("module_to_patch", module_index, remaining_program_size, rel,
+                                 branch_offset);
+                return false;
+            }
+        }
+
+        for (const Relocation& rel : patch.m_branch_to_module_relocations) {
+            const ptrdiff_t branch_offset =
+                CalculateBranchToModuleOffset(mode, patch_size, remaining_program_size, rel);
+
+            if (!IsValidBranchOffset(branch_offset)) {
+                LogInvalidBranch("patch_to_module", module_index, remaining_program_size, rel,
+                                 branch_offset);
+                return false;
+            }
+        }
+
+        remaining_program_size -= patch.image_size;
+    }
+
+    if (remaining_program_size != 0) {
+        LOG_WARNING(Core_ARM,
+                    "NCE branch relocation preflight size state mismatch after scan: mode={}, "
+                    "modules={}, remaining_program_size={:#x}, total_program_size={:#x}",
+                    mode, modules.size(), remaining_program_size, total_program_size);
+        return false;
+    }
+
+    return true;
 }
 
 void Patcher::WriteLoadContext() {

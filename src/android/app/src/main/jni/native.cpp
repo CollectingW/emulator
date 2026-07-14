@@ -2,12 +2,15 @@
 // SPDX-FileCopyrightText: Copyright 2025 Citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <codecvt>
 #include <locale>
 #include <string>
 #include <string_view>
 #include <dlfcn.h>
 #include <functional>
+#include <iterator>
+#include <limits>
 
 #ifdef ARCHITECTURE_arm64
 #include <adrenotools/driver.h>
@@ -54,12 +57,16 @@
 #include "core/hle/service/am/applet_manager.h"
 #include "core/hle/service/am/frontend/applets.h"
 #include "core/hle/service/filesystem/filesystem.h"
+#include "core/internal_network/network_interface.h"
 #include "core/loader/loader.h"
+#include "core/memory/cheat_engine.h"
 #include "frontend_common/config.h"
 #include "hid_core/frontend/emulated_controller.h"
 #include "hid_core/hid_core.h"
 #include "hid_core/hid_types.h"
 #include "jni/native.h"
+#include "network/network.h"
+#include "network/room_member.h"
 #include "video_core/renderer_base.h"
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 #include "video_core/vulkan_common/vulkan_instance.h"
@@ -78,10 +85,71 @@
 #define jconst [[maybe_unused]] const auto
 #define jauto [[maybe_unused]] auto
 
+namespace {
+
+std::function<bool(size_t, size_t)> CreateLongProgressCallback(JNIEnv* env, jobject jcallback) {
+    if (jcallback == nullptr) {
+        return [](size_t, size_t) { return true; };
+    }
+
+    const auto jlambda_class = env->GetObjectClass(jcallback);
+    const auto jlambda_invoke_method = env->GetMethodID(
+        jlambda_class, "invoke", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+    env->DeleteLocalRef(jlambda_class);
+
+    const auto jlong_class = env->FindClass("java/lang/Long");
+    const auto jlong_value_of =
+        env->GetStaticMethodID(jlong_class, "valueOf", "(J)Ljava/lang/Long;");
+
+    return [env, jcallback, jlambda_invoke_method, jlong_class,
+            jlong_value_of](size_t max, size_t progress) {
+        const auto jmax =
+            env->CallStaticObjectMethod(jlong_class, jlong_value_of, static_cast<jlong>(max));
+        const auto jprogress = env->CallStaticObjectMethod(
+            jlong_class, jlong_value_of, static_cast<jlong>(progress));
+
+        const auto jwas_cancelled =
+            env->CallObjectMethod(jcallback, jlambda_invoke_method, jmax, jprogress);
+
+        if (jmax != nullptr) {
+            env->DeleteLocalRef(jmax);
+        }
+        if (jprogress != nullptr) {
+            env->DeleteLocalRef(jprogress);
+        }
+
+        if (env->ExceptionCheck()) {
+            LOG_ERROR(Frontend, "Progress callback threw an exception; cancelling operation");
+            env->ExceptionClear();
+            return true;
+        }
+
+        if (jwas_cancelled == nullptr) {
+            return false;
+        }
+
+        const bool was_cancelled = Common::Android::GetJBoolean(env, jwas_cancelled);
+        env->DeleteLocalRef(jwas_cancelled);
+        return was_cancelled;
+    };
+}
+
+} // namespace
+
 static EmulationSession s_instance;
 
 EmulationSession::EmulationSession() {
     m_vfs = std::make_shared<FileSys::RealVfsFilesystem>();
+    m_network_initialized = m_system.GetRoomNetwork().Init();
+    if (!m_network_initialized) {
+        LOG_ERROR(Network, "Failed to initialize Android room networking");
+    }
+}
+
+EmulationSession::~EmulationSession() {
+    if (m_network_initialized) {
+        m_system.GetRoomNetwork().Shutdown();
+    }
 }
 
 EmulationSession& EmulationSession::GetInstance() {
@@ -160,6 +228,10 @@ bool EmulationSession::IsPaused() const {
     return m_is_running && m_is_paused;
 }
 
+bool EmulationSession::IsNetworkInitialized() const {
+    return m_network_initialized;
+}
+
 const Core::PerfStatsResults& EmulationSession::PerfStats() {
     m_perf_stats = m_system.GetAndResetPerfStats();
     return m_perf_stats;
@@ -209,7 +281,22 @@ void EmulationSession::ConfigureFilesystemProvider(const std::string& filepath) 
 }
 
 void EmulationSession::InitializeSystem(bool reload) {
+    std::scoped_lock lock(m_mutex);
+
+    if (m_is_running || m_load_result == Core::SystemResultStatus::Success) {
+        LOG_ERROR(Frontend, "Refusing to initialize system while emulation is active");
+        return;
+    }
+
+    auto& fs_controller = m_system.GetFileSystemController();
+    if (fs_controller.GetInitStage() < Service::FileSystem::InitStage::SETTINGS_READY) {
+        LOG_ERROR(Frontend, "Refusing to initialize system before settings are ready");
+        return;
+    }
+
     if (!reload) {
+        m_system.Initialize();
+
         // Initialize logging system
         Common::Log::Initialize();
         Common::Log::SetColorConsoleBackendEnabled(true);
@@ -218,6 +305,11 @@ void EmulationSession::InitializeSystem(bool reload) {
         m_input_subsystem.Initialize();
     }
 
+    Core::Crypto::KeyManager::Instance().ReloadKeys();
+    Core::Crypto::KeyManager::Instance().PopulateTickets();
+    LOG_INFO(Frontend, "InitializeSystem: keys_loaded_before_content={}",
+             Core::Crypto::KeyManager::Instance().AreKeysLoaded());
+
     // Initialize filesystem.
     m_system.SetFilesystem(m_vfs);
     m_system.GetUserChannel().clear();
@@ -225,7 +317,52 @@ void EmulationSession::InitializeSystem(bool reload) {
     m_system.SetContentProvider(std::make_unique<FileSys::ContentProviderUnion>());
     m_system.RegisterContentProvider(FileSys::ContentProviderUnionSlot::FrontendManual,
                                      m_manual_provider.get());
-    m_system.GetFileSystemController().CreateFactories(*m_vfs);
+    fs_controller.SetInitStage(Service::FileSystem::InitStage::FS_READY);
+    fs_controller.InitializeContentSystem(*m_vfs);
+}
+
+
+void EmulationSession::RefreshContentSystemUnlocked()
+{
+    auto& fs = m_system.GetFileSystemController();
+    if (auto filesystem = m_system.GetFilesystem()) {
+        fs.InitializeContentSystem(*filesystem);
+    }
+}
+
+
+void EmulationSession::RefreshContentSystem() {
+    std::scoped_lock lock(m_mutex);
+    RefreshContentSystemUnlocked();
+}
+
+
+bool EmulationSession::RefreshContentIfIdle(bool keys_loaded)
+{
+    if (!keys_loaded) {
+        return false;
+    }
+
+    std::scoped_lock lock(m_mutex);
+    if (m_is_running || m_load_result == Core::SystemResultStatus::Success) {
+        return false;
+    }
+
+    RefreshContentSystemUnlocked();
+    return true;
+}
+
+void EmulationSession::SetFilesystemInitStage(Service::FileSystem::InitStage stage) {
+    std::scoped_lock lock(m_mutex);
+    m_system.GetFileSystemController().SetInitStage(stage);
+}
+
+void EmulationSession::PromoteFilesystemInitStage(Service::FileSystem::InitStage stage) {
+    std::scoped_lock lock(m_mutex);
+    auto& controller = m_system.GetFileSystemController();
+    if (controller.GetInitStage() < stage) {
+        controller.SetInitStage(stage);
+    }
 }
 
 void EmulationSession::SetAppletId(int applet_id) {
@@ -246,6 +383,7 @@ Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string
     jauto android_keyboard = std::make_unique<Common::Android::SoftwareKeyboard::AndroidKeyboard>();
     m_software_keyboard = android_keyboard.get();
     m_system.SetShuttingDown(false);
+    Settings::values.swkbd_applet_mode.SetValue(Settings::AppletMode::HLE);
     m_system.ApplySettings();
     Settings::LogSettings();
     m_system.HIDCore().ReloadInputDevices();
@@ -458,7 +596,7 @@ void Java_org_citron_citron_1emu_NativeLibrary_setAppDirectory(JNIEnv* env, jobj
 }
 
 int Java_org_citron_citron_1emu_NativeLibrary_installFileToNand(JNIEnv* env, jobject instance,
-                                                            jstring j_file, jobject jcallback) {
+                                                              jstring j_file, jobject jcallback) {
     auto jlambdaClass = env->GetObjectClass(jcallback);
     auto jlambdaInvokeMethod = env->GetMethodID(
         jlambdaClass, "invoke", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
@@ -561,8 +699,16 @@ jobjectArray Java_org_citron_citron_1emu_utils_GpuDriverHelper_getSystemDriverIn
 }
 
 jboolean Java_org_citron_citron_1emu_NativeLibrary_reloadKeys(JNIEnv* env, jclass clazz) {
+    auto& session = EmulationSession::GetInstance();
     Core::Crypto::KeyManager::Instance().ReloadKeys();
-    return static_cast<jboolean>(Core::Crypto::KeyManager::Instance().AreKeysLoaded());
+    const bool keys_loaded = Core::Crypto::KeyManager::Instance().AreKeysLoaded();
+
+    const bool refreshed_content = session.RefreshContentIfIdle(keys_loaded);
+    LOG_INFO(Frontend,
+         "reloadKeys: keys_loaded={}, refreshed_content={}",
+         keys_loaded, refreshed_content);
+
+    return static_cast<jboolean>(keys_loaded);
 }
 
 void Java_org_citron_citron_1emu_NativeLibrary_unpauseEmulation(JNIEnv* env, jclass clazz) {
@@ -585,12 +731,57 @@ jboolean Java_org_citron_citron_1emu_NativeLibrary_isPaused(JNIEnv* env, jclass 
     return static_cast<jboolean>(EmulationSession::GetInstance().IsPaused());
 }
 
+jboolean Java_org_citron_citron_1emu_NativeLibrary_connectToRoom(JNIEnv* env, jobject jobj,
+                                                               jstring jnickname, jstring jhost,
+                                                               jint jport) {
+    auto& session = EmulationSession::GetInstance();
+    if (!session.IsNetworkInitialized() || jport <= 0 || jport > std::numeric_limits<u16>::max()) {
+        return false;
+    }
+
+    const auto nickname = Common::Android::GetJString(env, jnickname);
+    const auto host = Common::Android::GetJString(env, jhost);
+    if (nickname.empty() || nickname.size() > 20 || host.empty() || host.size() > 253) {
+        return false;
+    }
+
+    if (!Network::GetSelectedNetworkInterface()) {
+        Network::SelectFirstNetworkInterface();
+    }
+    if (!Network::GetSelectedNetworkInterface()) {
+        return false;
+    }
+
+    const auto room_member = session.System().GetRoomNetwork().GetRoomMember().lock();
+    if (!room_member || room_member->GetState() == Network::RoomMember::State::Joining ||
+        room_member->IsConnected()) {
+        return false;
+    }
+
+    room_member->Join(nickname, host.c_str(), static_cast<u16>(jport));
+    return room_member->IsConnected();
+}
+
+jint Java_org_citron_citron_1emu_NativeLibrary_getRoomConnectionState(JNIEnv* env, jobject jobj) {
+    const auto room_member =
+        EmulationSession::GetInstance().System().GetRoomNetwork().GetRoomMember().lock();
+    if (!room_member) {
+        return static_cast<jint>(Network::RoomMember::State::Uninitialized);
+    }
+    return static_cast<jint>(room_member->GetState());
+}
+
+void Java_org_citron_citron_1emu_NativeLibrary_leaveRoom(JNIEnv* env, jobject jobj) {
+    const auto room_member =
+        EmulationSession::GetInstance().System().GetRoomNetwork().GetRoomMember().lock();
+    if (room_member && room_member->IsConnected()) {
+        room_member->Leave();
+    }
+}
+
 void Java_org_citron_citron_1emu_NativeLibrary_initializeSystem(JNIEnv* env, jclass clazz,
                                                             jboolean reload) {
     // Initialize the emulated system.
-    if (!reload) {
-        EmulationSession::GetInstance().System().Initialize();
-    }
     EmulationSession::GetInstance().InitializeSystem(reload);
 }
 
@@ -662,6 +853,14 @@ void Java_org_citron_citron_1emu_NativeLibrary_submitInlineKeyboardText(JNIEnv* 
                                                                     jstring j_text) {
     const std::u16string input = Common::UTF8ToUTF16(Common::Android::GetJString(env, j_text));
     EmulationSession::GetInstance().SoftwareKeyboard()->SubmitInlineKeyboardText(input);
+}
+
+void Java_org_citron_citron_1emu_NativeLibrary_replaceInlineKeyboardText(JNIEnv* env, jclass clazz,
+                                                                         jstring j_text,
+                                                                         jint j_cursor_position) {
+    const std::u16string input = Common::UTF8ToUTF16(Common::Android::GetJString(env, j_text));
+    EmulationSession::GetInstance().SoftwareKeyboard()->ReplaceInlineKeyboardText(
+        input, static_cast<s32>(j_cursor_position));
 }
 
 void Java_org_citron_citron_1emu_NativeLibrary_submitInlineKeyboardInput(JNIEnv* env, jclass clazz,
@@ -772,6 +971,107 @@ jobjectArray Java_org_citron_citron_1emu_NativeLibrary_getPatchesForFile(JNIEnv*
     return jpatchArray;
 }
 
+jobjectArray Java_org_citron_citron_1emu_NativeLibrary_getCheatsForFile(JNIEnv* env, jobject jobj,
+                                                                    jstring jpath,
+                                                                    jstring jprogramId) {
+    (void)jpath;
+    auto& system = EmulationSession::GetInstance().System();
+    const auto program_id = EmulationSession::GetProgramId(env, jprogramId);
+    const FileSys::PatchManager pm{program_id, system.GetFileSystemController(),
+                                   system.GetContentProvider()};
+    const auto* cheat_engine = system.GetCheatEngine();
+    if (cheat_engine == nullptr) {
+        return env->NewObjectArray(0, Common::Android::GetPatchClass(), nullptr);
+    }
+    const auto active_build_id = FileSys::GetCheatBuildId(cheat_engine->GetBuildId());
+
+    const auto cheats = pm.GetCheats();
+    std::vector<FileSys::CheatPatch> active_cheats;
+    active_cheats.reserve(cheats.size());
+    std::copy_if(cheats.begin(), cheats.end(), std::back_inserter(active_cheats),
+                 [&active_build_id](const FileSys::CheatPatch& cheat) {
+                     return cheat.build_id == active_build_id;
+                 });
+
+    jobjectArray jpatchArray =
+        env->NewObjectArray(active_cheats.size(), Common::Android::GetPatchClass(), nullptr);
+    int i = 0;
+    for (const auto& cheat : active_cheats) {
+        const auto jname = Common::Android::ToJString(env, cheat.name);
+        const auto jversion = Common::Android::ToJString(env, cheat.source);
+        const auto jpatchProgramId = Common::Android::ToJString(env, std::to_string(program_id));
+        const auto jbuildId = Common::Android::ToJString(env, cheat.build_id);
+        jobject jpatch = env->NewObject(
+            Common::Android::GetPatchClass(), Common::Android::GetPatchConstructor(), cheat.enabled,
+            jname, jversion, static_cast<jint>(FileSys::PatchType::Cheat), jpatchProgramId,
+            jbuildId);
+        env->SetObjectArrayElement(jpatchArray, i, jpatch);
+        env->DeleteLocalRef(jpatch);
+        env->DeleteLocalRef(jname);
+        env->DeleteLocalRef(jversion);
+        env->DeleteLocalRef(jpatchProgramId);
+        env->DeleteLocalRef(jbuildId);
+        ++i;
+    }
+    return jpatchArray;
+}
+
+void Java_org_citron_citron_1emu_NativeLibrary_setCheatEnabled(JNIEnv* env, jobject jobj,
+                                                           jstring jbuildId, jstring jsource,
+                                                           jstring jname, jboolean jenabled) {
+    const auto build_id =
+        FileSys::NormalizeCheatBuildId(Common::Android::GetJString(env, jbuildId));
+    const auto source = Common::Android::GetJString(env, jsource);
+    const auto name = Common::Android::GetJString(env, jname);
+
+    if (build_id.empty() || source.empty() || name.empty()) {
+        return;
+    }
+
+    auto& disabled_cheats = Settings::values.disabled_cheats[build_id];
+    const auto cheat_key = FileSys::GetCheatConfigKey(source, name);
+    if (jenabled) {
+        disabled_cheats.erase(cheat_key);
+        // Migrate the old build-ID/name-only state when the user changes this cheat.
+        disabled_cheats.erase(name);
+        if (disabled_cheats.empty()) {
+            Settings::values.disabled_cheats.erase(build_id);
+        }
+    } else {
+        disabled_cheats.insert(cheat_key);
+    }
+}
+
+void Java_org_citron_citron_1emu_NativeLibrary_disableCheatsForAddon(JNIEnv* env, jobject jobj,
+                                                                  jstring jprogramId,
+                                                                  jstring jaddonName) {
+    auto& system = EmulationSession::GetInstance().System();
+    const auto program_id = EmulationSession::GetProgramId(env, jprogramId);
+    const auto addon_name = Common::Android::GetJString(env, jaddonName);
+    const FileSys::PatchManager pm{program_id, system.GetFileSystemController(),
+                                   system.GetContentProvider()};
+
+    for (const auto& cheat : pm.GetCheatsForMod(addon_name)) {
+        Settings::values.disabled_cheats[cheat.build_id].insert(
+            FileSys::GetCheatConfigKey(cheat.source, cheat.name));
+    }
+}
+
+jboolean Java_org_citron_citron_1emu_NativeLibrary_reloadCheats(JNIEnv* env, jobject jobj,
+                                                            jstring jprogramId) {
+    auto& system = EmulationSession::GetInstance().System();
+    auto* cheat_engine = system.GetCheatEngine();
+    if (cheat_engine == nullptr) {
+        return false;
+    }
+
+    const auto program_id = EmulationSession::GetProgramId(env, jprogramId);
+    const FileSys::PatchManager pm{program_id, system.GetFileSystemController(),
+                                   system.GetContentProvider()};
+    cheat_engine->Reload(pm.CreateCheatList(cheat_engine->GetBuildId()));
+    return true;
+}
+
 void Java_org_citron_citron_1emu_NativeLibrary_removeUpdate(JNIEnv* env, jobject jobj,
                                                         jstring jprogramId) {
     auto program_id = EmulationSession::GetProgramId(env, jprogramId);
@@ -793,21 +1093,21 @@ void Java_org_citron_citron_1emu_NativeLibrary_removeMod(JNIEnv* env, jobject jo
 }
 
 jobjectArray Java_org_citron_citron_1emu_NativeLibrary_verifyInstalledContents(JNIEnv* env,
-                                                                           jobject jobj,
-                                                                           jobject jcallback) {
-    auto jlambdaClass = env->GetObjectClass(jcallback);
-    auto jlambdaInvokeMethod = env->GetMethodID(
-        jlambdaClass, "invoke", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-    const auto callback = [env, jcallback, jlambdaInvokeMethod](size_t max, size_t progress) {
-        auto jwasCancelled = env->CallObjectMethod(jcallback, jlambdaInvokeMethod,
-                                                   Common::Android::ToJDouble(env, max),
-                                                   Common::Android::ToJDouble(env, progress));
-        return Common::Android::GetJBoolean(env, jwasCancelled);
-    };
+                                                                            jobject jobj,
+                                                                            jobject jcallback) {
+    const auto callback = CreateLongProgressCallback(env, jcallback);
 
     auto& session = EmulationSession::GetInstance();
+    auto* content_provider = session.GetContentProvider();
+    if (content_provider == nullptr) {
+        LOG_ERROR(Frontend, "Cannot verify installed contents before content provider is initialized");
+        const auto message =
+            Common::Android::ToJString(env, "Content provider is not initialized");
+        return env->NewObjectArray(1, Common::Android::GetStringClass(), message);
+    }
+
     std::vector<std::string> result = ContentManager::VerifyInstalledContents(
-        session.System(), *session.GetContentProvider(), callback);
+        session.System(), *content_provider, callback);
     jobjectArray jresult = env->NewObjectArray(result.size(), Common::Android::GetStringClass(),
                                                Common::Android::ToJString(env, ""));
     for (size_t i = 0; i < result.size(); ++i) {
@@ -817,30 +1117,14 @@ jobjectArray Java_org_citron_citron_1emu_NativeLibrary_verifyInstalledContents(J
 }
 
 jint Java_org_citron_citron_1emu_NativeLibrary_verifyGameContents(JNIEnv* env, jobject jobj,
-                                                              jstring jpath, jobject jcallback) {
-    auto jlambdaClass = env->GetObjectClass(jcallback);
-    auto jlambdaInvokeMethod = env->GetMethodID(
-        jlambdaClass, "invoke", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-
-    jclass jLongClass = env->FindClass("java/lang/Long");
-    jmethodID jLongValueOf = env->GetStaticMethodID(jLongClass, "valueOf", "(J)Ljava/lang/Long;");
-
-    const auto callback = [env, jcallback, jlambdaInvokeMethod, jLongClass, jLongValueOf](size_t max, size_t progress) {
-        jobject jmax = env->CallStaticObjectMethod(jLongClass, jLongValueOf, static_cast<jlong>(max));
-        jobject jprogress = env->CallStaticObjectMethod(jLongClass, jLongValueOf, static_cast<jlong>(progress));
-
-        jobject jwasCancelled = env->CallObjectMethod(jcallback, jlambdaInvokeMethod, jmax, jprogress);
-        
-        env->DeleteLocalRef(jmax);
-        env->DeleteLocalRef(jprogress);
-
-        if (jwasCancelled == nullptr) {
-            return false;
-        }
-
-        return Common::Android::GetJBoolean(env, jwasCancelled);
-    };
+                                                               jstring jpath, jobject jcallback) {
+    const auto callback = CreateLongProgressCallback(env, jcallback);
     auto& session = EmulationSession::GetInstance();
+    if (session.System().GetFilesystem() == nullptr) {
+        LOG_ERROR(Frontend, "Cannot verify game contents before filesystem is initialized");
+        return static_cast<jint>(ContentManager::GameVerificationResult::NotImplemented);
+    }
+
     return static_cast<jint>(ContentManager::VerifyGameContents(
         session.System(), Common::Android::GetJString(env, jpath), callback));
 }
@@ -893,9 +1177,16 @@ void Java_org_citron_citron_1emu_NativeLibrary_clearFilesystemProvider(JNIEnv* e
 }
 
 jboolean Java_org_citron_citron_1emu_NativeLibrary_areKeysPresent(JNIEnv* env, jobject jobj) {
-    auto& system = EmulationSession::GetInstance().System();
-    system.GetFileSystemController().CreateFactories(*system.GetFilesystem());
+    auto& session = EmulationSession::GetInstance();
+
     Core::Crypto::KeyManager::Instance().ReloadKeys();
+    const bool keys_loaded =
+        Core::Crypto::KeyManager::Instance().AreKeysLoaded();
+
+    const bool refreshed_content = session.RefreshContentIfIdle(keys_loaded);
+
+    LOG_INFO(Frontend, "areKeysPresent: refreshed_content={}", refreshed_content);
+
     return ContentManager::AreKeysPresent();
 }
 

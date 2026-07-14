@@ -7,17 +7,22 @@ add_executable(tests
     common/container_hash.cpp
     common/fibers.cpp
     common/host_memory.cpp
+    common/logging.cpp
     common/param_package.cpp
     common/range_map.cpp
     common/ring_buffer.cpp
     common/scratch_buffer.cpp
     common/unique_function.cpp
+    common/uint128.cpp
     core/core_timing.cpp
     core/internal_network/network.cpp
     precompiled_headers.h
     video_core/memory_tracker.cpp
     input_common/calibration_configuration_job.cpp
 )
+
+# Test translation units are not unity-safe.
+set_property(TARGET tests PROPERTY UNITY_BUILD OFF)
 
 create_target_directory_groups(tests)
 

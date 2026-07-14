@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include <mutex>
 #include <set>
+#include <span>
 #include <common/threadsafe_queue.h>
 #include <jni.h>
 #include "input_common/input_engine.h"
@@ -26,6 +28,11 @@ public:
     void RegisterController(jobject j_input_device);
 
     /**
+     * Clears all registered Android controllers and cached port identifiers.
+     */
+    void ClearControllers();
+
+    /**
      * Sets the status of a button on a specific controller.
      * @param guid 32 character hexadecimal string consisting of the controller's PID+VID.
      * @param port Port determined by controller connection order.
@@ -35,6 +42,12 @@ public:
     void SetButtonState(std::string guid, size_t port, int button_id, bool value);
 
     /**
+     * Sets the status of a button using the controller port cached at registration time.
+     * This avoids rebuilding a PadIdentifier from a Java GUID string on every gameplay event.
+     */
+    void SetButtonState(size_t port, int button_id, bool value);
+
+    /**
      * Sets the status of an axis on a specific controller.
      * @param guid 32 character hexadecimal string consisting of the controller's PID+VID.
      * @param port Port determined by controller connection order.
@@ -42,6 +55,11 @@ public:
      * @param value Value along the given axis.
      */
     void SetAxisPosition(std::string guid, size_t port, int axis_id, float value);
+
+    /**
+     * Sets multiple axis values using the controller port cached at registration time.
+     */
+    void SetAxisPositions(size_t port, std::span<const int> axis_ids, std::span<const float> values);
 
     /**
      * Sets the status of the motion sensor on a specific controller
@@ -88,6 +106,8 @@ public:
 
 private:
     std::unordered_map<PadIdentifier, jobject> input_devices;
+    std::unordered_map<size_t, PadIdentifier> port_identifiers;
+    mutable std::mutex input_devices_mutex;
 
     /// Returns the correct identifier corresponding to the player index
     PadIdentifier GetIdentifier(const std::string& guid, size_t port) const;

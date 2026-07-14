@@ -22,14 +22,9 @@ public:
     ~ConfigureFilesystem() override;
 
     void ApplyConfiguration();
-    void OnRunAutoloader(bool skip_confirmation = false);
 
 signals:
-    void UpdateInstallProgress();
     void RequestGameListRefresh();
-
-private slots:
-    void OnUpdateInstallProgress();
 
 private:
     void changeEvent(QEvent* event) override;
@@ -45,7 +40,6 @@ private:
     bool CopyDirRecursive(const QString& src, const QString& dest, QProgressDialog& progress, qint64& copied, qint64 total);
 
     std::unique_ptr<Ui::ConfigureFilesystem> ui;
-    QProgressDialog* install_progress = nullptr;
 
     bool m_old_custom_backup_enabled{};
     QString m_old_backup_path;

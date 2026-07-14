@@ -36,6 +36,7 @@ public:
     bool RelocateAndCopy(Common::ProcessAddress load_base, const Kernel::CodeSet::Segment& code,
                          Kernel::PhysicalMemory& program_image, EntryTrampolines* out_trampolines);
     size_t GetSectionSize() const noexcept;
+    bool CanRelocateBranches() const noexcept;
 
     [[nodiscard]] PatchMode GetPatchMode() const noexcept {
         return mode;
@@ -84,7 +85,18 @@ private:
         uintptr_t module_offset; ///< Offset in bytes from the start of the text section.
     };
 
+    [[nodiscard]] static bool IsValidBranchOffset(ptrdiff_t offset) noexcept;
+    [[nodiscard]] static ptrdiff_t CalculateBranchToPatchOffset(PatchMode patch_mode,
+                                                                 size_t patch_size,
+                                                                 size_t remaining_program_size,
+                                                                 const Relocation& rel) noexcept;
+    [[nodiscard]] static ptrdiff_t CalculateBranchToModuleOffset(PatchMode patch_mode,
+                                                                  size_t patch_size,
+                                                                  size_t remaining_program_size,
+                                                                  const Relocation& rel) noexcept;
+
     struct ModulePatch {
+        size_t image_size{};
         std::vector<Trampoline> m_trampolines;
         std::vector<Relocation> m_branch_to_patch_relocations{};
         std::vector<Relocation> m_branch_to_module_relocations{};

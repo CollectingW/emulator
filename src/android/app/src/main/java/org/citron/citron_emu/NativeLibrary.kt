@@ -158,6 +158,18 @@ object NativeLibrary {
     external fun isPaused(): Boolean
 
     /**
+     * Connects to an existing multiplayer room. This can block while ENet performs its handshake,
+     * so callers must invoke it off the main thread.
+     */
+    external fun connectToRoom(nickname: String, host: String, port: Int): Boolean
+
+    /** Returns the current multiplayer room member state. */
+    external fun getRoomConnectionState(): Int
+
+    /** Disconnects from the current multiplayer room. */
+    external fun leaveRoom()
+
+    /**
      * Returns the performance stats for the current game
      */
     external fun getPerfStats(): DoubleArray
@@ -188,6 +200,7 @@ object NativeLibrary {
     }
 
     var coreErrorAlertResult = false
+    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
     val coreErrorAlertLock = Object()
 
     private fun onCoreErrorImpl(title: String, message: String) {
@@ -343,6 +356,13 @@ object NativeLibrary {
     external fun submitInlineKeyboardText(text: String?)
 
     /**
+     * Replaces inline keyboard text with the IME editor contents.
+     * @param text Current text from the Android IME editor.
+     * @param cursor_position Cursor position in the editor text.
+     */
+    external fun replaceInlineKeyboardText(text: String?, cursor_position: Int)
+
+    /**
      * Submits inline keyboard input. Used to indicate keys pressed that are not text.
      * @param key_code Android Key Code associated with the keyboard input.
      */
@@ -391,6 +411,46 @@ object NativeLibrary {
      * @return Array of available patches
      */
     external fun getPatchesForFile(path: String, programId: String): Array<Patch>?
+
+    /**
+     * Checks the PatchManager for any cheats that are available
+     *
+     * @param path Path to game file. Can be a [Uri].
+     * @param programId String representation of a game's program ID
+     * @return Array of available cheats
+     */
+    external fun getCheatsForFile(path: String, programId: String): Array<Patch>?
+
+    /**
+     * Enables or disables a single cheat by build ID, source file, and readable name.
+     *
+     * @param buildId NSO build ID associated with the cheat file
+     * @param source Stable source identifier for the cheat file
+     * @param name Readable cheat name
+     * @param enabled Whether the cheat should be enabled
+     */
+    external fun setCheatEnabled(
+        buildId: String,
+        source: String,
+        name: String,
+        enabled: Boolean
+    )
+
+    /**
+     * Initializes all cheats in an installed addon as disabled.
+     *
+     * @param programId String representation of a game's program ID
+     * @param addonName Name of the installed addon directory
+     */
+    external fun disableCheatsForAddon(programId: String, addonName: String)
+
+    /**
+     * Reloads cheats for the currently running game, if a cheat engine is active.
+     *
+     * @param programId String representation of a game's program ID
+     * @return true if the running cheat engine accepted a reload
+     */
+    external fun reloadCheats(programId: String): Boolean
 
     /**
      * Removes an update for a given [programId]

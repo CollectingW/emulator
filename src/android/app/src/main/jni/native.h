@@ -7,6 +7,7 @@
 #include "core/core.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/hle/service/acc/profile_manager.h"
+#include "core/hle/service/filesystem/filesystem.h"
 #include "core/perf_stats.h"
 #include "frontend_common/content_manager.h"
 #include "jni/emu_window/emu_window.h"
@@ -17,7 +18,7 @@
 class EmulationSession final {
 public:
     explicit EmulationSession();
-    ~EmulationSession() = default;
+    ~EmulationSession();
 
     static EmulationSession& GetInstance();
     const Core::System& System() const;
@@ -37,6 +38,7 @@ public:
 
     bool IsRunning() const;
     bool IsPaused() const;
+    bool IsNetworkInitialized() const;
     void PauseEmulation();
     void UnPauseEmulation();
     void HaltEmulation();
@@ -46,6 +48,10 @@ public:
     const Core::PerfStatsResults& PerfStats();
     void ConfigureFilesystemProvider(const std::string& filepath);
     void InitializeSystem(bool reload);
+    void RefreshContentSystem();
+    bool RefreshContentIfIdle(bool keys_loaded);
+    void SetFilesystemInitStage(Service::FileSystem::InitStage stage);
+    void PromoteFilesystemInitStage(Service::FileSystem::InitStage stage);
     void SetAppletId(int applet_id);
     Core::SystemResultStatus InitializeEmulation(const std::string& filepath,
                                                  const std::size_t program_index,
@@ -58,6 +64,7 @@ public:
     static u64 GetProgramId(JNIEnv* env, jstring jprogramId);
 
 private:
+    void RefreshContentSystemUnlocked();
     static void LoadDiskCacheProgress(VideoCore::LoadCallbackStage stage, int progress, int max);
     static void OnEmulationStopped(Core::SystemResultStatus result);
     static void ChangeProgram(std::size_t program_index);
@@ -76,6 +83,7 @@ private:
     Core::SystemResultStatus m_load_result{Core::SystemResultStatus::ErrorNotInitialized};
     std::atomic<bool> m_is_running = false;
     std::atomic<bool> m_is_paused = false;
+    bool m_network_initialized{};
     Common::Android::SoftwareKeyboard::AndroidKeyboard* m_software_keyboard{};
     std::unique_ptr<FileSys::ManualContentProvider> m_manual_provider;
     int m_applet_id{1};

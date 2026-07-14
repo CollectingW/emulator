@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstring>
+#include <optional>
 #include "common/logging.h"
 #include "common/settings.h"
 #include "core/core.h"
@@ -29,7 +30,12 @@ namespace Loader {
 
 struct PatchCollection {
     explicit PatchCollection(bool is_application_) : is_application{is_application_} {
+        Reset();
+    }
+
+    void Reset() {
         module_patcher_indices.fill(-1);
+        patchers.clear();
         patchers.emplace_back();
     }
 
@@ -41,6 +47,10 @@ struct PatchCollection {
     }
 
     size_t GetTotalPatchSize() const {
+        if (!is_application || !Settings::IsNceEnabled()) {
+            return 0;
+        }
+
         size_t total_size{};
 #ifdef HAS_NCE
         for (auto& patcher : patchers) {
@@ -60,6 +70,21 @@ struct PatchCollection {
 
     s32 GetLastIndex() const {
         return static_cast<s32>(patchers.size()) - 1;
+    }
+
+    bool CanRelocateBranches() const {
+#ifdef HAS_NCE
+        if (!is_application || !Settings::IsNceEnabled()) {
+            return true;
+        }
+
+        for (const auto& patcher : patchers) {
+            if (!patcher.CanRelocateBranches()) {
+                return false;
+            }
+        }
+#endif
+        return true;
     }
 
     bool is_application;
@@ -175,6 +200,9 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
     }
     metadata.Print();
 
+    const FileSys::PatchManager pm{metadata.GetTitleID(), system.GetFileSystemController(),
+                                   system.GetContentProvider()};
+
     // Enable NCE only for applications with 39-bit address space.
     const bool is_39bit =
         metadata.GetAddressSpaceType() == FileSys::ProgramAddressSpaceType::Is39Bit;
@@ -185,30 +213,57 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
                                        "subsdk3", "subsdk4", "subsdk5", "subsdk6", "subsdk7",
                                        "subsdk8", "subsdk9", "sdk"};
 
-    std::size_t code_size{};
-
     // Define an nce patch context for each potential module.
     PatchCollection patch_ctx{is_application};
 
-    // Use the NSO module loader to figure out the code layout
-    for (size_t i = 0; i < static_modules.size(); i++) {
-        const auto& module = static_modules[i];
-        const FileSys::VirtualFile module_file{dir->GetFile(module)};
-        if (!module_file) {
-            continue;
+    const auto CalculateCodeLayout = [&]() -> std::optional<std::size_t> {
+        std::size_t next_code_size{};
+        patch_ctx.Reset();
+
+        // Use the NSO module loader to figure out the code layout.
+        for (size_t i = 0; i < static_modules.size(); i++) {
+            const auto& module = static_modules[i];
+            const FileSys::VirtualFile module_file{dir->GetFile(module)};
+            if (!module_file) {
+                continue;
+            }
+
+            const bool should_pass_arguments = std::strcmp(module, "rtld") == 0;
+            const auto tentative_next_load_addr = AppLoader_NSO::LoadModule(
+                process, system, *module_file, next_code_size, should_pass_arguments, false, pm,
+                patch_ctx.GetPatchers(), patch_ctx.GetLastIndex());
+            if (!tentative_next_load_addr) {
+                return std::nullopt;
+            }
+
+            patch_ctx.SaveIndex(i);
+            next_code_size = *tentative_next_load_addr;
         }
 
-        const bool should_pass_arguments = std::strcmp(module, "rtld") == 0;
-        const auto tentative_next_load_addr = AppLoader_NSO::LoadModule(
-            process, system, *module_file, code_size, should_pass_arguments, false, {},
-            patch_ctx.GetPatchers(), patch_ctx.GetLastIndex());
-        if (!tentative_next_load_addr) {
+        return next_code_size;
+    };
+
+    auto calculated_code_size = CalculateCodeLayout();
+    if (!calculated_code_size) {
+        return {ResultStatus::ErrorLoadingNSO, {}};
+    }
+
+#ifdef HAS_NCE
+    if (!patch_ctx.CanRelocateBranches()) {
+        LOG_WARNING(Loader,
+                    "NCE patch layout contains an out-of-range branch relocation for "
+                    "program_id={:016X}; falling back to Dynarmic for this boot",
+                    metadata.GetTitleID());
+        Settings::DisableNceForCurrentProcess();
+
+        calculated_code_size = CalculateCodeLayout();
+        if (!calculated_code_size) {
             return {ResultStatus::ErrorLoadingNSO, {}};
         }
-
-        patch_ctx.SaveIndex(i);
-        code_size = *tentative_next_load_addr;
     }
+#endif
+
+    std::size_t code_size = *calculated_code_size;
 
     // Enable direct memory mapping in case of NCE.
     const u64 fastmem_base = [&]() -> size_t {
@@ -232,8 +287,6 @@ AppLoader_DeconstructedRomDirectory::LoadResult AppLoader_DeconstructedRomDirect
     modules.clear();
     const VAddr base_address{GetInteger(process.GetEntryPoint())};
     VAddr next_load_addr{base_address};
-    const FileSys::PatchManager pm{metadata.GetTitleID(), system.GetFileSystemController(),
-                                   system.GetContentProvider()};
     for (size_t i = 0; i < static_modules.size(); i++) {
         const auto& module = static_modules[i];
         const FileSys::VirtualFile module_file{dir->GetFile(module)};

@@ -37,18 +37,22 @@ class AddonViewModel : ViewModel() {
     }
 
     fun refreshAddons() {
-        if (isRefreshing.get() || game == null) {
+        val currentGame = game ?: return
+        if (!isRefreshing.compareAndSet(false, true)) {
             return
         }
-        isRefreshing.set(true)
         viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                val patchList = (
-                    NativeLibrary.getPatchesForFile(game!!.path, game!!.programId)
-                        ?: emptyArray()
+            try {
+                val patchList = withContext(Dispatchers.IO) {
+                    val patchList = (
+                        NativeLibrary.getPatchesForFile(currentGame.path, currentGame.programId)
+                            ?: emptyArray()
                     ).toMutableList()
-                patchList.sortBy { it.name }
+                    patchList.sortBy { it.name }
+                    patchList
+                }
                 _patchList.value = patchList
+            } finally {
                 isRefreshing.set(false)
             }
         }
@@ -63,17 +67,19 @@ class AddonViewModel : ViewModel() {
             PatchType.Update -> NativeLibrary.removeUpdate(patch.programId)
             PatchType.DLC -> NativeLibrary.removeDLC(patch.programId)
             PatchType.Mod -> NativeLibrary.removeMod(patch.programId, patch.name)
+            PatchType.Cheat -> return
         }
         refreshAddons()
     }
 
     fun onCloseAddons() {
+        val currentGame = game ?: return
         if (_patchList.value.isEmpty()) {
             return
         }
 
         NativeConfig.setDisabledAddons(
-            game!!.programId,
+            currentGame.programId,
             _patchList.value.mapNotNull {
                 if (it.enabled) {
                     null

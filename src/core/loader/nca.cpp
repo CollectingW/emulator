@@ -8,6 +8,7 @@
 #include "core/core.h"
 #include "core/file_sys/content_archive.h"
 #include "core/file_sys/nca_metadata.h"
+#include "core/file_sys/patch_manager.h"
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/romfs_factory.h"
 #include "core/hle/kernel/k_process.h"
@@ -52,13 +53,50 @@ AppLoader_NCA::LoadResult AppLoader_NCA::Load(Kernel::KProcess& process, Core::S
     if (exefs == nullptr) {
         LOG_INFO(Loader, "No ExeFS found in NCA, looking for ExeFS from update");
 
-        // This NCA may be a sparse base of an installed title.
-        // Try to fetch the ExeFS from the installed update.
+        // This NCA may be a sparse base of an installed title (e.g. a digital game
+        // whose base NCA contains no ExeFS and relies entirely on an update NCA for
+        // its program code).  We must respect the per-game update selection stored in
+        // disabled_addons — using GetEntry() directly would always return the
+        // highest-priority installed update regardless of what the user disabled.
         const auto& installed = system.GetContentProvider();
-        const auto update_nca = installed.GetEntry(FileSys::GetUpdateTitleID(nca->GetTitleId()),
-                                                   FileSys::ContentRecordType::Program);
+        const auto base_title_id = nca->GetTitleId();
+        const auto update_tid = FileSys::GetUpdateTitleID(base_title_id);
 
-        if (update_nca) {
+        FileSys::PatchManager pm{base_title_id, system.GetFileSystemController(), installed};
+        const auto active_update = pm.GetActiveUpdate();
+
+        std::unique_ptr<FileSys::NCA> update_nca;
+        if (active_update.found) {
+            if (active_update.is_external) {
+                // External content dir — use IsUnionProvider() to safely reach the
+                // union API, matching the pattern used in patch_manager.cpp.
+                if (installed.IsUnionProvider()) {
+                    const auto* union_provider =
+                        static_cast<const FileSys::ContentProviderUnion*>(&installed);
+                    if (const auto* ext = union_provider->GetExternalProvider()) {
+                        if (auto raw = ext->GetEntryForVersion(
+                                update_tid, FileSys::ContentRecordType::Program,
+                                active_update.version)) {
+                            update_nca = std::make_unique<FileSys::NCA>(raw, nca.get());
+                        }
+                    }
+                }
+            } else {
+                // NAND / system update — GetActiveUpdate already checked disabled_addons
+                // and selected this as the highest enabled version.
+                // Fetch the raw entry and construct the NCA with nca.get() as base,
+                // matching the external-content branch above. ContentProvider::GetEntry()
+                // would construct the NCA with no base reference, which breaks
+                // delta-patched ExeFS content for sparse-base titles whose update NCA
+                // is stored relative to the base.
+                if (auto raw = installed.GetEntryRaw(update_tid,
+                                                     FileSys::ContentRecordType::Program)) {
+                    update_nca = std::make_unique<FileSys::NCA>(raw, nca.get());
+                }
+            }
+        }
+
+        if (update_nca && update_nca->GetStatus() == ResultStatus::Success) {
             exefs = update_nca->GetExeFS();
         }
 

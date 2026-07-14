@@ -44,8 +44,8 @@
     <string name="home_search_games">Search games</string>
     <string name="search_settings">Search settings</string>
     <string name="games_dir_selected">Games directory selected</string>
-    <string name="install_prod_keys">Install prod.keys</string>
-    <string name="install_prod_keys_description">Required to decrypt retail games</string>
+    <string name="install_prod_keys">Install prod/title keys</string>
+    <string name="install_prod_keys_description">Required to decrypt retail games and installed content</string>
     <string name="install_prod_keys_warning">Skip adding keys?</string>
     <string name="install_prod_keys_warning_description">Valid keys are required to emulate retail games. Only homebrew apps will function if you continue.</string>
     <string name="install_prod_keys_warning_help">https://discord.gg/axqZFEyzPQ</string>
@@ -272,7 +272,8 @@
     <string name="fastmem">Fastmem</string>
     <string name="logging">Logging</string>
     <string name="log_filter">Log Filter</string>
-    <string name="log_filter_description">Configure which log messages to display. Format: &lt;class&gt;:&lt;level&gt;. Example: *:Info Service:Debug</string>
+    <string name="log_filter_custom">Custom...</string>
+    <string name="log_filter_description">Configure which log messages to display. Format: &lt;class&gt;:&lt;level&gt;. Example: *:Warning Service:Debug</string>
 
     <!-- Audio settings strings -->
     <string name="audio_output_engine">Output engine</string>
@@ -444,6 +445,19 @@
     <string name="network_settings_header">Network Settings</string>
     <string name="airplane_mode">Airplane Mode</string>
     <string name="airplane_mode_description">Disable all network functionality, similar to Nintendo Switch airplane mode</string>
+    <string name="direct_connect">Direct Connect</string>
+    <string name="direct_connect_description">Join an existing multiplayer room by address</string>
+    <string name="direct_connect_status">Status: %1$s</string>
+    <string name="direct_connect_connect">Connect</string>
+    <string name="direct_connect_host">Server address</string>
+    <string name="direct_connect_port">Port</string>
+    <string name="direct_connect_nickname">Nickname</string>
+    <string name="direct_connect_connecting">Connecting…</string>
+    <string name="direct_connect_connected">Connected</string>
+    <string name="direct_connect_disconnected">Disconnected</string>
+    <string name="direct_connect_failed">Unable to connect to the room</string>
+    <string name="direct_connect_invalid_input">Enter a server address, port, and 4-20 character nickname.</string>
+    <string name="direct_connect_disconnect">Disconnect</string>
 
     <!-- Zep Zone Headers -->
     <string name="memory_layout_header">Memory Layout</string>
@@ -563,6 +577,8 @@
     <string name="emulation_pause">Pause emulation</string>
     <string name="emulation_unpause">Unpause emulation</string>
     <string name="emulation_input_overlay">Overlay options</string>
+    <string name="emulation_cheats">Cheats</string>
+    <string name="emulation_cheats_empty">No cheats are available for this game.</string>
     <string name="touchscreen">Touchscreen</string>
     <string name="lock_drawer">Lock drawer</string>
     <string name="unlock_drawer">Unlock drawer</string>

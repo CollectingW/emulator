@@ -60,6 +60,8 @@ class DriverViewModel : ViewModel() {
     fun reloadDriverData() {
         _areDriversLoading.value = true
         driverData = GpuDriverHelper.getDrivers()
+            .filterNot { driversToDelete.contains(it.first) }
+            .toMutableList()
         updateDriverList()
         _areDriversLoading.value = false
     }
@@ -71,8 +73,8 @@ class DriverViewModel : ViewModel() {
             Driver(
                 selectedDriver == GpuDriverMetadata(),
                 CitronApplication.appContext.getString(R.string.system_gpu_driver),
-                systemDriverData?.get(0) ?: "",
-                systemDriverData?.get(1) ?: ""
+                systemDriverData?.getOrNull(0) ?: "",
+                systemDriverData?.getOrNull(1) ?: ""
             )
         )
         driverData.forEach {
@@ -116,17 +118,17 @@ class DriverViewModel : ViewModel() {
 
     fun onCloseDriverManager(game: Game?) {
         _isDeletingDrivers.value = true
-        updateDriverNameForGame(game)
-        if (game == null) {
-            NativeConfig.saveGlobalConfig()
-        } else {
-            NativeConfig.savePerGameConfig()
-            NativeConfig.unloadPerGameConfig()
-            NativeConfig.reloadGlobalConfig()
-        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                updateDriverNameForGame(game)
+                if (game == null) {
+                    NativeConfig.saveGlobalConfig()
+                } else {
+                    NativeConfig.savePerGameConfig()
+                    NativeConfig.unloadPerGameConfig()
+                    NativeConfig.reloadGlobalConfig()
+                }
 
-        viewModelScope.launch {
-            withContext(Dispatchers.IO) {
                 driversToDelete.forEach {
                     val driver = File(it)
                     if (driver.exists()) {
@@ -134,6 +136,7 @@ class DriverViewModel : ViewModel() {
                     }
                 }
                 driversToDelete.clear()
+            } finally {
                 _isDeletingDrivers.value = false
             }
         }

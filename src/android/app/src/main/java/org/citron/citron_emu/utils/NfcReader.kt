@@ -6,7 +6,6 @@ package org.citron.citron_emu.utils
 import android.app.Activity
 import android.app.PendingIntent
 import android.content.Intent
-import android.content.IntentFilter
 import android.nfc.NfcAdapter
 import android.nfc.Tag
 import android.nfc.tech.NfcA
@@ -34,8 +33,6 @@ class NfcReader(private val activity: Activity) {
             }
         )
 
-        val tagDetected = IntentFilter(NfcAdapter.ACTION_TAG_DISCOVERED)
-        tagDetected.addCategory(Intent.CATEGORY_DEFAULT)
     }
 
     fun startScanning() {
@@ -48,7 +45,9 @@ class NfcReader(private val activity: Activity) {
 
     fun onNewIntent(intent: Intent) {
         val action = intent.action
-        if (NfcAdapter.ACTION_TAG_DISCOVERED != action &&
+        @Suppress("DEPRECATION")
+        val isTagDiscovered = NfcAdapter.ACTION_TAG_DISCOVERED == action
+        if (!isTagDiscovered &&
             NfcAdapter.ACTION_TECH_DISCOVERED != action &&
             NfcAdapter.ACTION_NDEF_DISCOVERED != action
         ) {
@@ -62,8 +61,8 @@ class NfcReader(private val activity: Activity) {
             return
         }
 
-        val tag =
-            intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG) ?: return
+        @Suppress("DEPRECATION")
+        val tag = intent.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG) ?: return
         readTagData(tag)
     }
 
@@ -103,7 +102,7 @@ class NfcReader(private val activity: Activity) {
             }
 
             try {
-                val data = ntag215FastRead(amiibo, dataStart, dataEnd - 1)
+                val data = ntag215FastRead(amiibo, dataStart, dataEnd - 1) ?: return null
                 System.arraycopy(data, 0, tagData, i, (dataEnd - dataStart) * pageSize)
             } catch (e: IOException) {
                 return null

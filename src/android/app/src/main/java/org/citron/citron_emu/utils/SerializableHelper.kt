@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.os.Parcelable
 import java.io.Serializable
 
+@Suppress("DEPRECATION")
 object SerializableHelper {
     inline fun <reified T : Serializable> Bundle.serializable(key: String): T? {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
