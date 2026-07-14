@@ -180,36 +180,33 @@ void ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
     for (const auto& desc : info.image_buffer_descriptors) {
         add_image(desc, false);
     }
+    const u64 image_table_generation = texture_cache.ComputeImageTableGeneration();
     for (const auto& desc : info.texture_descriptors) {
         if (desc.count > 1 && !desc.has_secondary) {
             const GPUVAddr cbuf_addr =
                 cbufs[desc.cbuf_index].Address() + desc.cbuf_offset;
-            const u64 image_table_generation = texture_cache.ComputeImageTableGeneration();
 
             const size_t byte_size = static_cast<size_t>(desc.count) << desc.size_shift;
 
-            // Fast path: (addr, count, image_table_generation) match.
+            // Single scan: (addr, count, image_table_generation) match returns the
+            // existing valid entry (hit); otherwise an invalid slot claimed for
+            // filling below (miss).
             // image_table_generation increments on every TIC table invalidation,
-            // so a generation hit implies the cached views are still valid.
-            // No ReadBlockUnsafe needed.
-            if (auto* fast = FindBindlessEntry(bindless_cache, cbuf_addr,
-                                               desc.count, image_table_generation);
-                fast != nullptr) {
-                for (const auto& v : fast->cached_views) {
-                    views.push_back(v);
-                }
-                for (const auto& s : fast->cached_samplers) {
-                    samplers.push_back(s);
-                }
+            // a generation hit implies the cached views are still valid and no
+            // ReadBlockUnsafe is needed.
+            BindlessCacheEntry& entry = FindOrAcquireBindlessEntry(
+                bindless_cache, bindless_cache_rr, cbuf_addr, desc.count,
+                image_table_generation);
+            if (entry.valid) {
+                views.insert(views.end(), entry.cached_views.begin(), entry.cached_views.end());
+                samplers.insert(samplers.end(), entry.cached_samplers.begin(),
+                                entry.cached_samplers.end());
                 continue;
             }
 
-            // Miss: read cbuf, hash, resolve views, populate cache entry.
+            // Miss: read cbuf, resolve views, populate cache entry.
             bindless_scratch.resize(byte_size);
             gpu_memory.ReadBlockUnsafe(cbuf_addr, bindless_scratch.data(), byte_size);
-            BindlessCacheEntry& entry = AcquireBindlessEntry(
-                bindless_cache, bindless_cache_rr, cbuf_addr, desc.count,
-                image_table_generation);
             const size_t views_start = views.size();
             const size_t samplers_start = samplers.size();
             for (u32 index = 0; index < desc.count; ++index) {

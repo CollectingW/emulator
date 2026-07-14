@@ -370,5 +370,10 @@ inline BindlessCacheEntry& AcquireBindlessEntry(BindlessCache& cache, size_t& ro
     slot.valid = false;
     return slot;
 }
+inline BindlessCacheEntry& FindOrAcquireBindlessEntry(BindlessCache& cache, size_t& round_robin,
+                                                      GPUVAddr addr, u32 count,
+                                                      u64 image_table_generation) {
+    return AcquireBindlessEntry(cache, round_robin, addr, count, image_table_generation);
+}
 
 } // namespace Vulkan
