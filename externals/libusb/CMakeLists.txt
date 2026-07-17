@@ -29,7 +29,9 @@ if (MINGW OR (${CMAKE_SYSTEM_NAME} MATCHES "Linux") OR APPLE)
     endif()
 
     set(LIBUSB_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/libusb")
-    set(LIBUSB_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libusb")
+    # LIBUSB_SRC_DIR is already set correctly above (CPM source dir preferred,
+    # local submodule path only as a last-resort fallback) -- do not
+    # reassign it here.
 
     # Workarounds for MSYS/MinGW
     if (MSYS)

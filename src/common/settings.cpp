@@ -211,7 +211,11 @@ float Volume() {
     if (values.audio_muted) {
         return 0.0f;
     }
-    return values.volume.GetValue() / static_cast<f32>(values.volume.GetDefault());
+    const auto volume =
+        values.volume.GetValue() / static_cast<f32>(values.volume.GetDefault());
+    const auto boost =
+        values.volume_boost.GetValue() / static_cast<f32>(values.volume_boost.GetDefault());
+    return volume * boost;
 }
 
 const char* TranslateCategory(Category category) {

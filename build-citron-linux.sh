@@ -123,6 +123,7 @@
 #   autoconf + automake + make              FFmpeg autotools build
 #   glslang (glslc)                         Vulkan shader compilation
 #   patchelf                                bundle RPATH normalization
+#   gamemode                                bundled into AppImage if present (package stage)
 # =============================================================================
 
 set -euo pipefail
@@ -146,6 +147,7 @@ LTO_MODE="${LTO_MODE:-full}"
 PGO_MODE="${PGO_MODE:-ir}"
 UNITY_BUILD="${UNITY_BUILD:-OFF}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
+NO_PACKAGE="${NO_PACKAGE:-false}"
 CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE:-${HOME}/.cache/cpm}"
 CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE/#\~/$HOME}"
 # Uncomment to optimize for this machine's CPU — produces a non-portable binary
@@ -376,24 +378,169 @@ _setup_apt() {
         build-essential cmake ninja-build git pkg-config \
         python3 python3-pip curl wget xz-utils \
         nasm yasm perl \
-        autoconf automake make \
+        autoconf automake libtool make \
         glslang-tools \
         patchelf \
         lsb-release software-properties-common gnupg \
-        libelf-dev libssl-dev libzstd-dev \
-        linux-tools-common linux-tools-generic 2>/dev/null || true
+        libelf-dev libzstd-dev libudev-dev zstd \
+        libgl-dev libopengl-dev \
+        libxkbcommon-dev
+    # linux-tools-common/generic are best-effort: the versioned
+    # linux-tools-$(uname -r) package frequently doesn't exist on the runner's
+    # kernel and is intentionally optional.  Keeping them in a separate call
+    # (not grouped with the mandatory packages above) ensures a missing
+    # perf/tools package never masks a failure in the required deps.
+    sudo apt-get install -y linux-tools-common linux-tools-generic 2>/dev/null || true
     sudo apt-get install -y "linux-tools-$(uname -r)" 2>/dev/null || true
+    # NOTE: libgl-dev and libopengl-dev are MANDATORY even though citron is
+    # Vulkan-only and never calls any OpenGL API at runtime.  The aqt-downloaded
+    # Qt6 (linux_gcc_64) was built against the GLVND OpenGL interface, so its
+    # Qt6GuiConfig.cmake requires cmake's WrapOpenGL module to find
+    # libOpenGL.so (from libopengl-dev) and libGL.so / GL headers (libgl-dev)
+    # at configure time.  Without them find_package(Qt6 ... Widgets) fails:
+    #   Could NOT find WrapOpenGL → Qt6Gui NOT FOUND → Qt6Widgets NOT FOUND
+    # Both packages are tiny (~200 KB combined) and must not be in the optional
+    # block below, which can fail atomically and be silently skipped.
+
+    # ── Hardware video acceleration for bundled FFmpeg ──────────────────────
+    # externals/ffmpeg/CMakeLists.txt uses pkg_check_modules to detect VAAPI,
+    # VDPAU, and NVDEC, then conditionally enables them in FFmpeg's configure
+    # script.  Missing packages cause graceful fallback (--disable-vaapi etc.),
+    # EXCEPT for the packages that are REQUIRED inside the LIBVA_FOUND block:
+    #
+    #   if(LIBVA_FOUND)
+    #       pkg_check_modules(LIBDRM libdrm REQUIRED)   ← hard-fail if absent
+    #       find_package(X11 REQUIRED)                   ← hard-fail if absent
+    #       pkg_check_modules(LIBVA-DRM libva-drm REQUIRED)
+    #       pkg_check_modules(LIBVA-X11 libva-x11 REQUIRED)
+    #
+    # Additionally, SDL2's cmake (also CPM-sourced) runs CheckX11() whenever
+    # libX11.so.6 is findable on the system.  Inside CheckX11(), SDL2 2.x
+    # unconditionally hard-fails if Xext.h is absent:
+    #
+    #   message_error("*** ERROR: Missing Xext.h, maybe you need to
+    #                  install the libxext-dev package?")
+    #
+    # This means libxext-dev MUST always be installed alongside libx11-dev.
+    # Installing libx11-dev without libxext-dev triggers the SDL2 hard-fail.
+    #
+    # These cascading REQUIRED constraints make libva-dev, libdrm-dev,
+    # libx11-dev, and libxext-dev an all-or-nothing group: if libva-dev
+    # installs but any of its sibling REQUIRED packages don't, cmake
+    # hard-fails the build.  APT's atomic install behaviour (the whole command
+    # either succeeds or is rolled back) is what keeps this safe.
+    # DO NOT use --ignore-missing on this group, and DO NOT split it.
+
+    # ── VAAPI + X11 core (all-or-nothing) ───────────────────────────────────
+    # libva-dev      → libva.pc, libva-drm.pc, libva-x11.pc
+    # libva-drm2     → runtime libva-drm.so (linked by FFmpeg)
+    # libva-x11-2    → runtime libva-x11.so
+    # libdrm-dev     → libdrm.pc (REQUIRED by FFmpeg cmake when LIBVA_FOUND)
+    # libx11-dev     → X11 headers (REQUIRED by FFmpeg cmake when LIBVA_FOUND)
+    # libxext-dev    → Xext.h (REQUIRED by SDL2 cmake whenever libX11.so.6 is
+    #                  findable, regardless of VAAPI; must travel with libx11-dev)
+    info "Installing VAAPI + X11 core packages (required together)..."
+    sudo apt-get install -y \
+        libva-dev libva-drm2 libva-x11-2 \
+        libdrm-dev \
+        libx11-dev libxext-dev \
+        || error "VAAPI+X11 group install failed — a partial install would leave libva found but libdrm/X11 missing, which FFmpeg's cmake treats as a hard requirement once libva is found, causing a much less clear failure later"
+
+    # ── VDPAU (NVIDIA legacy — independent of VAAPI) ─────────────────────────
+    # libvdpau-dev → vdpau.pc; cmake detects independently of libva
+    info "Installing VDPAU hw-accel packages..."
+    sudo apt-get install -y libvdpau-dev \
+        || warn "libvdpau-dev unavailable — FFmpeg will build with --disable-vdpau"
+
+    # ── Linux audio output (ALSA + PulseAudio) — REQUIRED, not optional ─────
+    # SDL2's CheckALSA()/CheckPulseAudio() configure-time checks look for
+    # alsa/asoundlib.h and pulse/pulseaudio.h. If either header is missing,
+    # SDL2 silently disables that backend (SDL_ALSA / SDL_PULSEAUDIO → OFF)
+    # rather than hard-failing the build — the same "quiet fallback" pattern
+    # as the VAAPI/VDPAU checks above, except here the fallback is SDL2's
+    # SDL_DUMMYAUDIO/SDL_DISKAUDIO drivers, neither of which produces any
+    # actual sound. A machine missing both dev packages therefore still
+    # builds and packages successfully, but ships an AppImage with no
+    # functioning Linux audio output at all — a failure mode with no build
+    # warning to catch it, which is why this group is REQUIRED (unlike the
+    # --ignore-missing X11/XCB extras below).
+    #
+    # This also solves packaging determinism: package-citron-linux.sh finds
+    # libasound.so.2 and libpulse.so.0 to bundle into the AppImage via
+    # `ldconfig -p` against whatever happens to be installed on the machine
+    # running the packaging step (see comments there). Installing the -dev
+    # packages here pulls in their runtime libs (libasound2, libpulse0) as
+    # apt dependencies, so that probe now succeeds identically on every
+    # machine that runs this script — CI included — instead of depending on
+    # whether that machine happens to already have a desktop audio stack.
+    info "Installing ALSA + PulseAudio dev packages (required for audio output)..."
+    sudo apt-get install -y libasound2-dev libpulse-dev \
+        || error "ALSA/PulseAudio dev packages failed to install — Linux builds would have no audio output"
+
+    # ── X11 / XCB optional extras (SDL2 Xi/XSS/XCB, Qt XCB platform plugin) ─
+    # These extend the X11 install above with input, screensaver, and XCB
+    # extension headers.  All are optional — their cmake checks produce soft
+    # warnings, not hard errors.  --ignore-missing lets a single unavailable
+    # package name (which can vary across distro versions) skip cleanly.
+    info "Installing optional X11/XCB extension packages..."
+    sudo apt-get install -y --ignore-missing \
+        libxi-dev \
+        libxkbcommon-x11-dev libxss-dev \
+        libxcb1-dev libxcb-cursor-dev libxcb-image0-dev \
+        libxcb-render-util0-dev libxinerama-dev \
+        libgles-dev \
+        || warn "Some optional X11/XCB extension packages unavailable — optional display features may be limited"
+
+    # Optional: bundled into the AppImage by package-citron-linux.sh if present.
+    sudo apt-get install -y gamemode 2>/dev/null || true
 }
 
 _setup_pacman() {
     info "Installing build tools via pacman..."
     sudo pacman -Syu --needed --noconfirm \
-        base-devel cmake ninja git \
+        base-devel cmake ninja git pkgconf \
         python python-pip curl wget \
         nasm yasm perl \
-        autoconf automake make \
-        glslang clang lld llvm \
-        patchelf perf 2>/dev/null || true
+        autoconf automake libtool make \
+        glslang clang lld llvm zstd \
+        patchelf \
+        elfutils libsystemd \
+        libglvnd libxkbcommon
+    # perf is optional and kept out of the required transaction above so a
+    # missing/unavailable perf package can never mask a failure in the
+    # required compiler/build toolchain (matches the apt path).
+    sudo pacman -S --needed --noconfirm perf 2>/dev/null || true
+
+    # ── VAAPI + X11 core (all-or-nothing) ───────────────────────────────────
+    info "Installing VAAPI + X11 core packages (required together)..."
+    sudo pacman -S --needed --noconfirm \
+        libva libva-utils \
+        libdrm \
+        libx11 libxext \
+        || error "VAAPI+X11 group install failed — a partial install would leave libva found but libdrm/X11 missing, which FFmpeg's cmake treats as a hard requirement once libva is found, causing a much less clear failure later"
+
+    # ── VDPAU (NVIDIA legacy — independent of VAAPI) ─────────────────────────
+    info "Installing VDPAU hw-accel packages..."
+    sudo pacman -S --needed --noconfirm libvdpau \
+        || warn "libvdpau unavailable — FFmpeg will build with --disable-vdpau"
+
+    # ── Linux audio output (ALSA + PulseAudio) — REQUIRED, not optional ─────
+    info "Installing ALSA + PulseAudio dev packages (required for audio output)..."
+    sudo pacman -S --needed --noconfirm alsa-lib libpulse \
+        || error "ALSA/PulseAudio packages failed to install — Linux builds would have no audio output"
+
+    # ── X11 / XCB optional extras (SDL2 Xi/XSS/XCB, Qt XCB platform plugin) ─
+    info "Installing optional X11/XCB extension packages..."
+    sudo pacman -S --needed --noconfirm \
+        libxi \
+        libxkbcommon-x11 libxss \
+        libxcb xcb-util-cursor xcb-util-image \
+        xcb-util-renderutil libxinerama \
+        2>/dev/null || warn "Some optional X11/XCB extension packages unavailable — optional display features may be limited"
+
+    # Optional: bundled into the AppImage by package-citron-linux.sh if present.
+    sudo pacman -S --needed --noconfirm gamemode 2>/dev/null || true
+
     # Arch ships unversioned tools — symlink to versioned names
     for tool in clang clang++ lld llvm-profdata llvm-bolt merge-fdata; do
         local versioned="/usr/local/bin/${tool}-${CLANG_VERSION}"
@@ -410,12 +557,46 @@ _setup_dnf() {
         gcc gcc-c++ cmake ninja-build git pkg-config \
         python3 python3-pip curl wget xz \
         nasm yasm perl \
-        autoconf automake make \
+        autoconf automake libtool make \
         glslang clang lld patchelf \
-        elfutils-libelf-devel openssl-devel \
-        perf 2>/dev/null || true
+        elfutils-libelf-devel libudev-devel zstd \
+        libglvnd-devel libglvnd-opengl-devel libxkbcommon-devel
+    # perf is optional and kept out of the required transaction above so a
+    # missing/unavailable perf package can never mask a failure in the
+    # required compiler/build toolchain (matches the apt path).
+    sudo dnf install -y perf 2>/dev/null || true
     sudo dnf install -y "clang${CLANG_VERSION}" "llvm${CLANG_VERSION}" 2>/dev/null \
         || warn "Versioned LLVM ${CLANG_VERSION} not in repos — using default clang."
+
+    # ── VAAPI + X11 core (all-or-nothing) ───────────────────────────────────
+    info "Installing VAAPI + X11 core packages (required together)..."
+    sudo dnf install -y \
+        libva-devel \
+        libdrm-devel \
+        libX11-devel libXext-devel \
+        || error "VAAPI+X11 group install failed — a partial install would leave libva found but libdrm/X11 missing, which FFmpeg's cmake treats as a hard requirement once libva is found, causing a much less clear failure later"
+
+    # ── VDPAU (NVIDIA legacy — independent of VAAPI) ─────────────────────────
+    info "Installing VDPAU hw-accel packages..."
+    sudo dnf install -y libvdpau-devel \
+        || warn "libvdpau-devel unavailable — FFmpeg will build with --disable-vdpau"
+
+    # ── Linux audio output (ALSA + PulseAudio) — REQUIRED, not optional ─────
+    info "Installing ALSA + PulseAudio dev packages (required for audio output)..."
+    sudo dnf install -y alsa-lib-devel pulseaudio-libs-devel \
+        || error "ALSA/PulseAudio dev packages failed to install — Linux builds would have no audio output"
+
+    # ── X11 / XCB optional extras (SDL2 Xi/XSS/XCB, Qt XCB platform plugin) ─
+    info "Installing optional X11/XCB extension packages..."
+    sudo dnf install -y \
+        libXi-devel \
+        libxkbcommon-x11-devel libXScrnSaver-devel \
+        libxcb-devel xcb-util-cursor-devel xcb-util-image-devel \
+        xcb-util-renderutil-devel libXinerama-devel \
+        2>/dev/null || warn "Some optional X11/XCB extension packages unavailable — optional display features may be limited"
+
+    # Optional: bundled into the AppImage by package-citron-linux.sh if present.
+    sudo dnf install -y gamemode 2>/dev/null || true
 }
 
 _setup_yum() {
@@ -425,11 +606,46 @@ _setup_yum() {
         gcc gcc-c++ cmake ninja-build git pkg-config \
         python3 python3-pip curl wget xz \
         nasm yasm perl \
-        autoconf automake make \
+        autoconf automake libtool make \
         clang lld patchelf \
-        elfutils-libelf-devel openssl-devel \
-        perf 2>/dev/null || true
+        elfutils-libelf-devel libudev-devel zstd \
+        libglvnd-devel libglvnd-opengl-devel libxkbcommon-devel
+    # perf is optional and kept out of the required transaction above so a
+    # missing/unavailable perf package can never mask a failure in the
+    # required compiler/build toolchain (matches the apt path).
+    sudo yum install -y perf 2>/dev/null || true
     warn "yum/CentOS: LLVM ${CLANG_VERSION} may not be in repos. Check SCL or llvm.org."
+
+    # ── VAAPI + X11 core (all-or-nothing) ───────────────────────────────────
+    info "Installing VAAPI + X11 core packages (required together)..."
+    sudo yum install -y \
+        libva-devel \
+        libdrm-devel \
+        libX11-devel libXext-devel \
+        || error "VAAPI+X11 group install failed — a partial install would leave libva found but libdrm/X11 missing, which FFmpeg's cmake treats as a hard requirement once libva is found, causing a much less clear failure later"
+
+    # ── VDPAU (NVIDIA legacy — independent of VAAPI) ─────────────────────────
+    info "Installing VDPAU hw-accel packages..."
+    sudo yum install -y libvdpau-devel \
+        || warn "libvdpau-devel unavailable — FFmpeg will build with --disable-vdpau"
+
+    # ── Linux audio output (ALSA + PulseAudio) — REQUIRED, not optional ─────
+    info "Installing ALSA + PulseAudio dev packages (required for audio output)..."
+    sudo yum install -y alsa-lib-devel pulseaudio-libs-devel \
+        || error "ALSA/PulseAudio dev packages failed to install — Linux builds would have no audio output"
+
+    # ── X11 / XCB optional extras (SDL2 Xi/XSS/XCB, Qt XCB platform plugin) ─
+    info "Installing optional X11/XCB extension packages..."
+    sudo yum install -y \
+        libXi-devel \
+        libxkbcommon-x11-devel libXScrnSaver-devel \
+        libxcb-devel xcb-util-cursor-devel xcb-util-image-devel \
+        xcb-util-renderutil-devel libXinerama-devel \
+        2>/dev/null || warn "Some optional X11/XCB extension packages unavailable — optional display features may be limited"
+
+    # Optional: bundled into the AppImage by package-citron-linux.sh if present.
+    # May require EPEL or an RPM Fusion-style repo on RHEL-based distros.
+    sudo yum install -y gamemode 2>/dev/null || true
 }
 
 _setup_zypper() {
@@ -438,23 +654,90 @@ _setup_zypper() {
         gcc gcc-c++ cmake ninja git pkg-config \
         python3 python3-pip curl wget xz \
         nasm yasm perl \
-        autoconf automake make \
+        autoconf automake libtool make \
         glslang clang lld llvm patchelf \
-        libelf-devel libopenssl-devel \
-        perf 2>/dev/null || true
+        libelf-devel libudev-devel zstd \
+        Mesa-libGL-devel libglvnd-devel libxkbcommon-devel
+    # perf is optional and kept out of the required transaction above so a
+    # missing/unavailable perf package can never mask a failure in the
+    # required compiler/build toolchain (matches the apt path).
+    sudo zypper install -y --no-recommends perf 2>/dev/null || true
+
+    # ── VAAPI + X11 core (all-or-nothing) ───────────────────────────────────
+    info "Installing VAAPI + X11 core packages (required together)..."
+    sudo zypper install -y --no-recommends \
+        libva-devel \
+        libdrm-devel \
+        libX11-devel libXext-devel \
+        || error "VAAPI+X11 group install failed — a partial install would leave libva found but libdrm/X11 missing, which FFmpeg's cmake treats as a hard requirement once libva is found, causing a much less clear failure later"
+
+    # ── VDPAU (NVIDIA legacy — independent of VAAPI) ─────────────────────────
+    info "Installing VDPAU hw-accel packages..."
+    sudo zypper install -y --no-recommends libvdpau-devel \
+        || warn "libvdpau-devel unavailable — FFmpeg will build with --disable-vdpau"
+
+    # ── Linux audio output (ALSA + PulseAudio) — REQUIRED, not optional ─────
+    info "Installing ALSA + PulseAudio dev packages (required for audio output)..."
+    sudo zypper install -y --no-recommends alsa-devel libpulse-devel \
+        || error "ALSA/PulseAudio dev packages failed to install — Linux builds would have no audio output"
+
+    # ── X11 / XCB optional extras (SDL2 Xi/XSS/XCB, Qt XCB platform plugin) ─
+    info "Installing optional X11/XCB extension packages..."
+    sudo zypper install -y --no-recommends \
+        libXi-devel \
+        libxkbcommon-x11-devel libXss-devel \
+        libxcb-devel xcb-util-cursor-devel xcb-util-image-devel \
+        xcb-util-renderutil-devel libXinerama-devel Mesa-libGLESv2-devel \
+        2>/dev/null || warn "Some optional X11/XCB extension packages unavailable — optional display features may be limited"
+
+    # Optional: bundled into the AppImage by package-citron-linux.sh if present.
+    sudo zypper install -y --no-recommends gamemode 2>/dev/null || true
 }
 
 _setup_emerge() {
     info "Installing build tools via emerge..."
     sudo emerge --ask=n \
         dev-build/cmake dev-build/ninja dev-vcs/git \
-        dev-lang/python dev-lang/perl \
+        dev-lang/python dev-python/pip net-misc/curl net-misc/wget \
+        dev-lang/perl \
         dev-lang/nasm dev-lang/yasm \
         sys-devel/clang sys-devel/lld \
-        dev-build/autoconf dev-build/automake \
+        dev-build/autoconf dev-build/automake sys-devel/libtool \
         media-libs/glslang \
         dev-util/patchelf \
-        dev-libs/elfutils dev-libs/openssl 2>/dev/null || true
+        dev-libs/elfutils virtual/udev app-arch/zstd \
+        media-libs/libglvnd x11-libs/libxkbcommon \
+        sys-apps/util-linux 2>/dev/null || true
+
+    # ── VAAPI + X11 core (all-or-nothing) ───────────────────────────────────
+    info "Installing VAAPI + X11 core packages (required together)..."
+    sudo emerge --ask=n \
+        media-libs/libva \
+        x11-libs/libdrm \
+        x11-libs/libX11 x11-libs/libXext \
+        || error "VAAPI+X11 group install failed — a partial install would leave libva found but libdrm/X11 missing, which FFmpeg's cmake treats as a hard requirement once libva is found, causing a much less clear failure later"
+
+    # ── VDPAU (NVIDIA legacy — independent of VAAPI) ─────────────────────────
+    info "Installing VDPAU hw-accel packages..."
+    sudo emerge --ask=n x11-libs/libvdpau \
+        || warn "libvdpau unavailable — FFmpeg will build with --disable-vdpau"
+
+    # ── Linux audio output (ALSA + PulseAudio) — REQUIRED, not optional ─────
+    info "Installing ALSA + PulseAudio dev packages (required for audio output)..."
+    sudo emerge --ask=n media-libs/alsa-lib media-libs/libpulse \
+        || error "ALSA/PulseAudio packages failed to install — Linux builds would have no audio output"
+
+    # ── X11 / XCB optional extras (SDL2 Xi/XSS/XCB, Qt XCB platform plugin) ─
+    info "Installing optional X11/XCB extension packages..."
+    sudo emerge --ask=n \
+        x11-libs/libXi \
+        x11-libs/libXScrnSaver \
+        x11-libs/libxcb x11-libs/xcb-util-cursor x11-libs/xcb-util-image \
+        x11-libs/xcb-util-renderutil x11-libs/libXinerama \
+        2>/dev/null || warn "Some optional X11/XCB extension packages unavailable — optional display features may be limited"
+
+    # Optional: bundled into the AppImage by package-citron-linux.sh if present.
+    sudo emerge --ask=n games-util/gamemode 2>/dev/null || true
 }
 
 _install_llvm_clang() {
@@ -525,6 +808,11 @@ _verify_tools() {
     else
         warn   "  aqt -> NOT FOUND (Qt download by cmake will fail)"; ok=0
     fi
+    if ls /usr/lib*/libgamemode.so* &>/dev/null 2>&1 || ldconfig -p 2>/dev/null | grep -q libgamemode; then
+        success "  gamemode -> available (will be bundled into AppImage)"
+    else
+        warn   "  gamemode -> not found (optional — AppImage will be built without it)"
+    fi
     [[ ${ok} -eq 1 ]] && success "All required tools available." \
                        || warn   "Some tools missing — check output above."
     echo ""
@@ -571,6 +859,28 @@ apply_source_patches() {
 # Profile helpers
 # =============================================================================
 
+_move_profraw_no_clobber() {
+    # Move every *.profraw from src_dir into dest_dir, renaming on collision
+    # rather than silently overwriting -- multiple source directories (see
+    # _collect_appimage_profiles below) can both contain a profile from the
+    # same PID, and mv'ing a whole glob at once would let the second source
+    # silently clobber a same-named file the first source already placed.
+    local src_dir="$1" dest_dir="$2"
+    local file
+    for file in "${src_dir}"/*.profraw; do
+        [[ -f "${file}" ]] || continue
+        local base="${file##*/}"
+        local stem="${base%.profraw}"
+        local target="${dest_dir}/${base}"
+        local idx=0
+        while [[ -e "${target}" ]]; do
+            idx=$((idx + 1))
+            target="${dest_dir}/${stem}-${idx}.profraw"
+        done
+        mv "${file}" "${target}"
+    done
+}
+
 normalize_profraw_dirs() {
     # IR PGO on Linux writes a directory named default-<pid>.profraw/ containing
     # numbered chunk files rather than a flat .profraw file.  Flatten them so
@@ -598,28 +908,38 @@ normalize_profraw_dirs() {
 }
 
 _collect_appimage_profiles() {
-    # Profiles generated by running the AppImage are written next to the AppImage file
-    # by the citron.sh wrapper. We collect them back to the main profile directory
-    # so they can be merged and used by the build script.
+    # Profiles generated by running the AppImage are written next to the
+    # AppImage file itself via AppDir/.env (LLVM_PROFILE_FILE=$(dirname
+    # "$APPIMAGE")/default-%p.profraw, set by package-citron-linux.sh). pkgforge's
+    # quick-sharun places the finished .AppImage in build_dir/AppImage/AppImage/,
+    # so that is where profraw lands. We collect it back to the main profile
+    # directory so it can be merged and used by the build script.
+    #
+    # Also check the legacy linuxdeploy location (build_dir/AppImage/) for
+    # compatibility with profiles collected before the pkgforge switch.
 
     # Standard PGO profiles
-    if [[ -d "${BUILD_GENERATE}/AppImage" ]]; then
-        local count; count="$(find "${BUILD_GENERATE}/AppImage" -maxdepth 1 -name "*.profraw" 2>/dev/null | wc -l)"
-        if [[ "${count}" -gt 0 ]]; then
-            info "Collecting ${count} profile(s) from ${BUILD_GENERATE}/AppImage..."
-            mv "${BUILD_GENERATE}/AppImage"/*.profraw "${PROFILE_DIR}/" 2>/dev/null || true
+    for profile_src in "${BUILD_GENERATE}/AppImage/AppImage" "${BUILD_GENERATE}/AppImage"; do
+        if [[ -d "${profile_src}" ]]; then
+            local count; count="$(find "${profile_src}" -maxdepth 1 -name "*.profraw" 2>/dev/null | wc -l)"
+            if [[ "${count}" -gt 0 ]]; then
+                info "Collecting ${count} profile(s) from ${profile_src}..."
+                _move_profraw_no_clobber "${profile_src}" "${PROFILE_DIR}"
+            fi
         fi
-    fi
+    done
 
     # CS-PGO profiles
-    if [[ -d "${BUILD_CSGENERATE}/AppImage" ]]; then
-        local count; count="$(find "${BUILD_CSGENERATE}/AppImage" -maxdepth 1 -name "*.profraw" 2>/dev/null | wc -l)"
-        if [[ "${count}" -gt 0 ]]; then
-            info "Collecting ${count} CS profile(s) from ${BUILD_CSGENERATE}/AppImage..."
-            mkdir -p "${PROFILE_DIR}/cs"
-            mv "${BUILD_CSGENERATE}/AppImage"/*.profraw "${PROFILE_DIR}/cs/" 2>/dev/null || true
+    for profile_src in "${BUILD_CSGENERATE}/AppImage/AppImage" "${BUILD_CSGENERATE}/AppImage"; do
+        if [[ -d "${profile_src}" ]]; then
+            local count; count="$(find "${profile_src}" -maxdepth 1 -name "*.profraw" 2>/dev/null | wc -l)"
+            if [[ "${count}" -gt 0 ]]; then
+                info "Collecting ${count} CS profile(s) from ${profile_src}..."
+                mkdir -p "${PROFILE_DIR}/cs"
+                _move_profraw_no_clobber "${profile_src}" "${PROFILE_DIR}/cs"
+            fi
         fi
-    fi
+    done
 }
 
 _merge_profraw_to_profdata() {
@@ -707,8 +1027,9 @@ build_common_cmake_args() {
         "-DCITRON_DOWNLOAD_TIME_ZONE_DATA=ON"
         "-DCITRON_CHECK_SUBMODULES=OFF"
         "-DCITRON_USE_LLVM_DEMANGLE=OFF"
-        "-DCITRON_USE_QT_MULTIMEDIA=ON"
         "-DCITRON_USE_QT_WEB_ENGINE=OFF"
+        "-DCITRON_USE_QT_MULTIMEDIA=OFF"
+        "-DQT_NO_PRIVATE_MODULE_WARNING=ON"
         "-DENABLE_QT_TRANSLATION=ON"
         "-DENABLE_WEB_SERVICE=ON"
         "-DENABLE_OPENSSL=ON"
@@ -718,10 +1039,27 @@ build_common_cmake_args() {
         "-DCITRON_USE_EXTERNAL_VULKAN_UTILITY_LIBRARIES=ON"
         "-DCITRON_BUILD_TYPE=Release"
         "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
-        "-DCMAKE_C_FLAGS=-mtls-dialect=gnu2"
-        "-DCMAKE_CXX_FLAGS=-mtls-dialect=gnu2"
         "-Wno-dev"
     )
+
+    # -mtls-dialect=gnu2 is x86_64-specific; skip for aarch64
+    local host_arch; host_arch="$(uname -m)"
+    local use_tls_dialect=false
+    case "${_ARCH_ARG}" in
+        aarch64) use_tls_dialect=false ;;
+        auto)
+            [[ "${host_arch}" == "x86_64" ]] && use_tls_dialect=true || use_tls_dialect=false
+            ;;
+        *)
+            # Explicit x86_64 or v3
+            [[ "${host_arch}" == "x86_64" ]] && use_tls_dialect=true || use_tls_dialect=false
+            ;;
+    esac
+    if [[ "${use_tls_dialect}" == "true" ]]; then
+        _CMAKE_ARGS+=("-DCMAKE_C_FLAGS=-mtls-dialect=gnu2")
+        _CMAKE_ARGS+=("-DCMAKE_CXX_FLAGS=-mtls-dialect=gnu2")
+    fi
+
     [[ "${UNITY_BUILD}" == "ON" ]] && _CMAKE_ARGS+=("-DENABLE_UNITY_BUILD=ON")
     # Ensure the function always returns 0: a trailing [[ ]] that evaluates false
     # would otherwise return exit code 1, triggering set -e in the caller.
@@ -805,10 +1143,19 @@ _patch_binary_rpaths() {
     local icu_path; icu_path="$(grep -oP '(?<=export CITRON_ICU_PATH=")[^"]+' "${config_file}" || true)"
     local xcb_path; xcb_path="$(grep -oP '(?<=export CITRON_XCB_PATH=")[^"]+' "${config_file}" || true)"
     
-    # Construct RPATH (Qt lib, ICU lib, XCB lib)
+    # Construct RPATH (Qt lib, ICU lib, XCB lib).
+    #
+    # Variable semantics from config.sh (set by CMake configure_file):
+    #   CITRON_QT_PATH  = QT_TARGET_PATH  = Qt6 prefix          (append /lib)
+    #   CITRON_ICU_PATH = ICU_BINARY_DIR  = ICU lib dir itself   (do NOT append /lib)
+    #   CITRON_XCB_PATH = XCB_BUILD_ROOT  = XCB prefix           (append /lib)
+    #
+    # ICU_BINARY_DIR is set as "${ICU_BUILD_DIR}/lib" in icu_build.cmake, so
+    # it already ends in /lib. Appending /lib again produces a wrong path like
+    # "icu-build/lib/lib" which does not exist on disk.
     local rpath=""
     [[ -n "${qt_path}" ]]  && rpath="${qt_path}/lib"
-    [[ -n "${icu_path}" ]] && rpath="${rpath}${rpath:+:}${icu_path}/lib"
+    [[ -n "${icu_path}" ]] && rpath="${rpath}${rpath:+:}${icu_path}"
     [[ -n "${xcb_path}" ]] && rpath="${rpath}${rpath:+:}${xcb_path}/lib"
     
     if [[ -z "${rpath}" ]]; then
@@ -817,14 +1164,29 @@ _patch_binary_rpaths() {
     fi
     
     info "Patching RPATH for binaries in ${bin_dir}..."
+    # --force-rpath writes the old-style DT_RPATH tag instead of the default
+    # DT_RUNPATH. DT_RPATH is searched BEFORE LD_LIBRARY_PATH, whereas
+    # DT_RUNPATH is searched AFTER it. Without this, a dev's desktop session
+    # with LD_LIBRARY_PATH pointing at a distro/KDE Qt6 install can cause
+    # `ldd` (and the dynamic linker) to resolve libQt6Core.so.6 etc. to that
+    # OLDER system Qt instead of this CPM-built Qt — even though the binary
+    # was linked against the newer one — producing errors like:
+    #   libQt6Core.so.6: version `Qt_6.9' not found
+    # DT_RPATH ensures our CPM-built Qt/ICU/XCB win regardless of the host's
+    # LD_LIBRARY_PATH.
     for bin in "citron" "citron-cmd" "citron-room"; do
         if [[ -f "${bin_dir}/${bin}" ]]; then
-            # We prepend the custom RPATH to any existing one
+            # Always re-apply --force-rpath to convert any DT_RUNPATH tag to
+            # DT_RPATH. Even when existing_rpath already contains our path, a
+            # DT_RUNPATH tag would still be searched AFTER LD_LIBRARY_PATH,
+            # letting a system Qt shadow the CPM-built one. --force-rpath
+            # ensures we always end up with DT_RPATH regardless of the linker's
+            # default tag choice.
             local existing_rpath; existing_rpath="$(patchelf --print-rpath "${bin_dir}/${bin}" 2>/dev/null || echo "")"
-            if [[ -z "${existing_rpath}" ]]; then
-                patchelf --set-rpath "${rpath}" "${bin_dir}/${bin}"
-            elif [[ "${existing_rpath}" != *"${rpath}"* ]]; then
-                patchelf --set-rpath "${rpath}:${existing_rpath}" "${bin_dir}/${bin}"
+            if [[ -z "${existing_rpath}" ]] || [[ "${existing_rpath}" == *"${rpath}"* ]]; then
+                patchelf --force-rpath --set-rpath "${rpath}${existing_rpath:+:${existing_rpath}}" "${bin_dir}/${bin}"
+            else
+                patchelf --force-rpath --set-rpath "${rpath}:${existing_rpath}" "${bin_dir}/${bin}"
             fi
         fi
     done
@@ -877,23 +1239,130 @@ build_appimage_stage() {
     local build_dir="$1"
     local stage_name="$2"
     local binary_override="${3:-}"
-    header "Building AppImage for ${stage_name}"
 
-    if [[ -n "${binary_override}" ]]; then
-        # Override CITRON_BINARY_DIR so build-v2.sh finds the correct binary
-        export CITRON_BINARY_DIR="$(dirname "${binary_override}")"
-    else
-        unset CITRON_BINARY_DIR
+    if [[ "${NO_PACKAGE:-false}" == "true" ]]; then
+        info "Skipping AppImage packaging for ${stage_name} (--nopackage)."
+        return
     fi
 
-    # Run the AppImage build script
-    bash "${SCRIPT_DIR}/AppImageBuilder/build-v2.sh" "${build_dir}"
+    header "Building AppImage for ${stage_name} (pkgforge)"
 
-    # Create the output directory and move the AppImage
-    mkdir -p "${build_dir}/AppImage/user"
-    mv "${build_dir}/citron-x86_64.AppImage" "${build_dir}/AppImage/"
+    # build_dir is the cmake build tree this binary was built in. For
+    # bolt/propeller, the caller passes the relocs-enabled build tree as
+    # build_dir, and the post-link-rewritten binary separately as
+    # binary_override (substituted into <install_root>/usr/bin/citron below).
 
-    success "AppImage for ${stage_name} placed in ${build_dir}/AppImage/citron-x86_64.AppImage"
+    # ── Stage install tree manually (not cmake --install) ─────────────────────
+    # pkgforge's quick-sharun expects a standard /usr layout (binary, desktop
+    # file, icon, and metadata under one prefix) so it can discover and bundle
+    # them. We deliberately do NOT run `cmake --install <build_dir>`:
+    #
+    #   1. It installs the ENTIRE configured project, including every
+    #      CPM-fetched dependency (zlib, zstd, openal, opus, cubeb, ...) —
+    #      gigabytes of headers/cmake-configs/pkgconfig files this AppImage
+    #      never needs.
+    #   2. cubeb's cmake_install.cmake has a broken install(... include/cubeb)
+    #      rule that resolves against citron's top-level source dir instead
+    #      of cubeb's own source dir, and hard-fails `cmake --install` for
+    #      the whole tree:
+    #        CMake Error: file INSTALL cannot find ".../include/cubeb"
+    #
+    # citron's own install surface (src/citron/CMakeLists.txt +
+    # CMakeLists.txt) is exactly: the citron binary, plus four static files
+    # from dist/ (desktop entry, icon, mime type, appstream metadata). We
+    # replicate that small, known set directly — no sudo, no system changes,
+    # no CPM dependency install rules involved.
+    local install_root="${build_dir}/install-root"
+    rm -rf "${install_root}"
+    mkdir -p "${install_root}/usr/bin" \
+             "${install_root}/usr/share/applications" \
+             "${install_root}/usr/share/icons/hicolor/scalable/apps" \
+             "${install_root}/usr/share/icons/hicolor/256x256/apps" \
+             "${install_root}/usr/share/mime/packages" \
+             "${install_root}/usr/share/metainfo"
+
+    info "Staging install tree for ${stage_name} (no cmake --install, no sudo)..."
+    info "  Staging root: ${install_root}"
+
+    [[ -f "${build_dir}/bin/citron" ]] \
+        || error "citron binary not found at ${build_dir}/bin/citron"
+    cp "${build_dir}/bin/citron" "${install_root}/usr/bin/citron"
+
+    cp "${SCRIPT_DIR}/dist/org.citron_emu.citron.desktop" \
+        "${install_root}/usr/share/applications/"
+    cp "${SCRIPT_DIR}/dist/citron.svg" \
+        "${install_root}/usr/share/icons/hicolor/scalable/apps/org.citron_emu.citron.svg"
+    if [ -f "${SCRIPT_DIR}/dist/org.citron_emu.citron.png" ]; then
+        cp "${SCRIPT_DIR}/dist/org.citron_emu.citron.png" \
+            "${install_root}/usr/share/icons/hicolor/256x256/apps/"
+    fi
+    cp "${SCRIPT_DIR}/dist/org.citron_emu.citron.xml" \
+        "${install_root}/usr/share/mime/packages/" 2>/dev/null || true
+    cp "${SCRIPT_DIR}/dist/org.citron_emu.citron.metainfo.xml" \
+        "${install_root}/usr/share/metainfo/" 2>/dev/null || true
+
+    # Qt translations: citron's own cmake does not install these. Pull them
+    # directly from the aqt-downloaded Qt under CPM_SOURCE_CACHE/qt-bin
+    # (see CMakeModules/qt_download.cmake) if present.
+    local qt_translations
+    qt_translations="$(find "${CPM_SOURCE_CACHE}/qt-bin" -maxdepth 4 -type d \
+        -name 'translations' 2>/dev/null | head -1)"
+    if [[ -n "${qt_translations}" ]]; then
+        mkdir -p "${install_root}/usr/share/qt6"
+        cp -r "${qt_translations}" "${install_root}/usr/share/qt6/translations"
+    fi
+
+    if [[ -n "${binary_override}" ]]; then
+        # The bolt/propeller-rewritten binary replaces the cmake-installed one.
+        info "Substituting BOLT/Propeller-optimized binary..."
+        cp "${binary_override}" "${install_root}/usr/bin/citron"
+    fi
+
+    # ── Package via pkgforge (quick-sharun) ──────────────────────────────────
+    local pkg_work="${build_dir}/AppImage"
+    rm -rf "${pkg_work}"
+    mkdir -p "${pkg_work}/user"
+    cd "${pkg_work}"
+
+    local version="${APP_VERSION:-}"
+    if [[ -z "${version}" ]]; then
+        version="$(git -C "${SCRIPT_DIR}" rev-parse --short HEAD 2>/dev/null || echo "${stage_name}")"
+    fi
+    local arch_suffix="${ARCH_SUFFIX:-"-${stage_name}"}"
+
+    # Extract CITRON_QT_PATH from config.sh so package-citron-linux.sh can
+    # derive QT_LOCATION and point quick-sharun at CPM's Qt plugins rather
+    # than the system Qt's plugins (system plugins depend on the system
+    # libQt6Core.so.6 which may be older than the CPM-built Qt 6.9.3 citron
+    # was compiled against, causing "libQt6Core.so.6: version 'Qt_6.9' not
+    # found" at AppImage runtime).
+    local config_file="${build_dir}/AppImageBuilder/config.sh"
+    local qt_path=""
+    if [[ -f "${config_file}" ]]; then
+        qt_path="$(grep -oP '(?<=export CITRON_QT_PATH=")[^"]+' "${config_file}" || true)"
+    fi
+    if [[ -z "${qt_path}" ]]; then
+        error "CITRON_QT_PATH not found in ${config_file} — cannot package AppImage with correct Qt plugins. Ensure the build completed successfully and config.sh was written."
+    fi
+
+    APP_VERSION="${version}" \
+    ARCH_SUFFIX="${arch_suffix}" \
+    DEVEL="${DEVEL:-false}" \
+    OUTPATH="${pkg_work}" \
+    DESTDIR="${install_root}" \
+    CITRON_QT_PATH="${qt_path}" \
+        bash "${SCRIPT_DIR}/AppImageBuilder/package-citron-linux.sh" \
+        || error "package-citron-linux.sh failed for ${stage_name}"
+
+    cd "${build_dir}"
+
+    local appimage
+    appimage="$(find "${pkg_work}" -maxdepth 1 -name '*.AppImage' | head -1)"
+    if [[ -z "${appimage}" ]]; then
+        error "package-citron-linux.sh did not produce an AppImage in ${pkg_work}"
+    fi
+
+    success "AppImage for ${stage_name} placed in ${appimage}"
 }
 
 # =============================================================================
@@ -1379,6 +1848,8 @@ while [[ $# -gt 0 ]]; do
         --relwithdebinfo) BUILD_TYPE="RelWithDebInfo"; shift ;;
         --clang-version)
             CLANG_VERSION="$2"; _set_clang_tools; shift 2 ;;
+        --nopackage|--no-package)
+            NO_PACKAGE=true; shift ;;
         --help|-h)
             sed -n '/^# build-citron-linux/,/^# ===/p' "$0" | head -130
             exit 0 ;;

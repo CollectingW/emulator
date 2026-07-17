@@ -191,6 +191,16 @@ struct Values {
                                        Specialization::Scalar | Specialization::Percentage,
                                        true,
                                        true};
+    SwitchableSetting<u8, true> volume_boost{
+        linkage,
+        100,
+        100,
+        200,
+        "volume_boost",
+        Category::Audio,
+        Specialization::Scalar | Specialization::Percentage,
+        true,
+        true};
     Setting<bool, false> audio_muted{
         linkage, false, "audio_muted", Category::Audio, Specialization::Default, true, true};
     Setting<bool, false> dump_audio_commands{

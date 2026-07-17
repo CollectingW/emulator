@@ -12,6 +12,7 @@
     <dimen name="spacing_refresh_end">72dp</dimen>
     <dimen name="menu_width">256dp</dimen>
     <dimen name="card_width">165dp</dimen>
+    <dimen name="card_width_small">90dp</dimen>
     <dimen name="icon_inset">24dp</dimen>
     <dimen name="spacing_bottom_list_fab">96dp</dimen>
     <dimen name="spacing_fab">24dp</dimen>

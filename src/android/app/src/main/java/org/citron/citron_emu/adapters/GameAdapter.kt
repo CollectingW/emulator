@@ -19,24 +19,49 @@ import androidx.preference.PreferenceManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.citron.citron_emu.CitronApplication
 import org.citron.citron_emu.HomeNavigationDirections
 import org.citron.citron_emu.R
-import org.citron.citron_emu.CitronApplication
-import org.citron.citron_emu.databinding.CardGameBinding
+import org.citron.citron_emu.databinding.CardGameCoverBinding
 import org.citron.citron_emu.databinding.CardGameListBinding
 import org.citron.citron_emu.model.Game
 import org.citron.citron_emu.model.GamesViewModel
 import org.citron.citron_emu.utils.GameIconUtils
-import org.citron.citron_emu.utils.ViewUtils.marquee
 import org.citron.citron_emu.viewholder.AbstractViewHolder
 
-class GameAdapter(private val activity: AppCompatActivity) :
+class GameAdapter(private val activity: AppCompatActivity, private var tilesMode: Boolean = false) :
     AbstractDiffAdapter<Game, AbstractViewHolder<Game>>(exact = false) {
 
+    companion object {
+        private const val VIEW_TYPE_LIST = 0
+        private const val VIEW_TYPE_TILES = 1
+    }
+
+    fun setTilesMode(enabled: Boolean) {
+        if (tilesMode != enabled) {
+            tilesMode = enabled
+            notifyDataSetChanged()
+        }
+    }
+
+    override fun getItemViewType(position: Int): Int =
+        if (tilesMode) VIEW_TYPE_TILES else VIEW_TYPE_LIST
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): AbstractViewHolder<Game> {
-        val binding = CardGameListBinding.inflate(LayoutInflater.from(parent.context), parent, false)
-        return GameListViewHolder(binding)
+        return when (viewType) {
+            VIEW_TYPE_TILES -> {
+                val binding = CardGameCoverBinding.inflate(
+                    LayoutInflater.from(parent.context), parent, false
+                )
+                GameTilesViewHolder(binding)
+            }
+            else -> {
+                val binding = CardGameListBinding.inflate(
+                    LayoutInflater.from(parent.context), parent, false
+                )
+                GameListViewHolder(binding)
+            }
+        }
     }
 
     inner class GameListViewHolder(val binding: CardGameListBinding) :
@@ -57,6 +82,17 @@ class GameAdapter(private val activity: AppCompatActivity) :
 
         fun onLongClick(game: Game): Boolean {
             return handleGameLongClick(game)
+        }
+    }
+
+    inner class GameTilesViewHolder(val binding: CardGameCoverBinding) :
+        AbstractViewHolder<Game>(binding) {
+        override fun bind(model: Game) {
+            binding.imageGameScreen.scaleType = ImageView.ScaleType.CENTER_CROP
+            GameIconUtils.loadGameIcon(model, binding.imageGameScreen)
+
+            binding.cardGame.setOnClickListener { handleGameClick(model) }
+            binding.cardGame.setOnLongClickListener { handleGameLongClick(model) }
         }
     }
 

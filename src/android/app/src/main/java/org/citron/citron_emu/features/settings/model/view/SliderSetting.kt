@@ -26,7 +26,7 @@ class SliderSetting(
 
     fun getSelectedValue(needsGlobal: Boolean = false) =
         when (setting) {
-            is AbstractByteSetting -> setting.getByte(needsGlobal).toInt()
+            is AbstractByteSetting -> setting.getByte(needsGlobal).toInt() and 0xFF
             is AbstractShortSetting -> setting.getShort(needsGlobal).toInt()
             is AbstractIntSetting -> setting.getInt(needsGlobal)
             is AbstractFloatSetting -> (setting.getFloat(needsGlobal) * scale).roundToInt()

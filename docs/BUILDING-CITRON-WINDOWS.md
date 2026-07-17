@@ -76,8 +76,9 @@ cd emulator
 
 # 4. Copy build/generate/bin/ to a Windows machine and run citron.exe.
 #    Play games for 15-30 minutes, then exit cleanly (File > Exit or Ctrl+Q).
-#    A file/directory named default-<pid>.profraw appears next to citron.exe.
-#    Copy it back to build/pgo-profiles/ on the Linux build machine.
+#    A directory named default-<pid>.profraw/ (containing numbered chunk
+#    files, not a single flat file) appears next to citron.exe. Copy the
+#    entire directory back to build/pgo-profiles/ on the Linux build machine.
 
 # 5. Build the optimized binary
 ./build-clangtron-windows.sh use --pgo-type ir --lto full
@@ -169,7 +170,7 @@ Pick `clang-cl` if you want a binary that behaves and debugs like something Visu
 
 ## Stages
 
-```
+```text
 setup → generate → [profiling session] → use → [optional: csgenerate → use]
                                               → [llvm-mingw + Linux host only: bolt / propeller]
 ```
@@ -354,7 +355,7 @@ Requires hardware branch-stack support (`perf -b`): AMD Zen 4+ with kernel 6.1+,
 
 ## Build Output Structure
 
-```
+```text
 build/
 ├── clang-cl/
 │   ├── generate/citron.exe        Stage 1 instrumented binary (clang-cl)
@@ -368,12 +369,12 @@ build/
 ├── bolt/bin/citron.exe            BOLT-relinked binary (experimental, llvm-mingw)
 ├── propeller/bin/citron.exe       Propeller-relinked binary (experimental, llvm-mingw)
 ├── pgo-profiles/                  Shared between both --compiler paths
-│   ├── default-<pid>.profraw      llvm-mingw: copy profraw files here from Windows
+│   ├── default-<pid>.profraw/     llvm-mingw: copy the whole directory here from Windows
 │   ├── default.profdata           llvm-mingw: merged stage 1 profile (auto-generated)
 │   ├── merged.profdata            llvm-mingw: merged stage1 + CS profile (auto-generated)
 │   ├── clang-cl-ir.profdata       clang-cl: merged stage 1 profile (auto-generated)
 │   ├── clang-cl-merged.profdata   clang-cl: merged stage1 + CS profile (auto-generated)
-│   └── cs/                        Copy CS profraw files here (both paths)
+│   └── cs/                        Copy CS profraw directories here (both paths)
 ├── llvm-mingw/                    Downloaded llvm-mingw toolchain (Linux only)
 └── generate/externals/qt/         Downloaded Qt for Windows target
 ```
