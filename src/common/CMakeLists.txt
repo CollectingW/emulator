@@ -251,6 +251,17 @@ if (CITRON_USE_PRECOMPILED_HEADERS)
     target_precompile_headers(common PRIVATE precompiled_headers.h)
 endif()
 
+if (CITRON_ENABLE_TRACY)
+    if (NOT TARGET Tracy::TracyClient)
+        message(FATAL_ERROR "CITRON_ENABLE_TRACY=ON but Tracy::TracyClient was not fetched. Enable CITRON_USE_CPM or provide Tracy separately.")
+    endif()
+    target_compile_definitions(common PUBLIC CITRON_ENABLE_TRACY=1)
+    if (CITRON_ENABLE_TRACY_MEMORY)
+        target_compile_definitions(common PUBLIC CITRON_ENABLE_TRACY_MEMORY=1)
+    endif()
+    target_link_libraries(common PUBLIC Tracy::TracyClient)
+endif()
+
 citron_configure_lto(common)
 
 create_target_directory_groups(common)

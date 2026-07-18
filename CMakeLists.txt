@@ -112,6 +112,13 @@ option(CITRON_ENABLE_LTO "Enable link-time optimization" OFF)
 
 option(CITRON_ENABLE_PGO_GENERATE "Build with PGO instrumentation to generate profile data (Stage 1)" OFF)
 option(CITRON_ENABLE_PGO_USE "Build using PGO profile data for optimization (Stage 2)" OFF)
+
+option(CITRON_ENABLE_TRACY "Enable Tracy profiler instrumentation (default off, zero overhead when disabled)" OFF)
+option(CITRON_ENABLE_TRACY_MEMORY "Enable verbose Tracy profiling for memory read/write operations (high overhead)" OFF)
+
+if (CITRON_ENABLE_TRACY AND NOT CITRON_USE_CPM)
+    message(FATAL_ERROR "CITRON_ENABLE_TRACY requires CITRON_USE_CPM=ON (Tracy is fetched via CPM in CMakeModules/dependencies.cmake)")
+endif()
 set(CITRON_PGO_PROFILE_DIR "${CMAKE_BINARY_DIR}/pgo-profiles" CACHE PATH "Directory to store PGO profile data")
 
 option(CITRON_DOWNLOAD_TIME_ZONE_DATA "Always download time zone binaries" OFF)

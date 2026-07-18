@@ -566,6 +566,67 @@ set(CITRON_XCB_KEYSYMS_VER "0.4.1" CACHE STRING "XCB keysyms version")
 set(CITRON_XCB_RENDERUTIL_VER "0.3.10" CACHE STRING "XCB renderutil version")
 set(CITRON_XCB_WM_VER "0.4.2" CACHE STRING "XCB wm version")
 
+# ── Tracy (optional profiler) ─────────────────────────────────────────────────
+# Fetched only when CITRON_ENABLE_TRACY=ON.  TRACY_ENABLE must be set before
+# CPMAddPackage so the client library and application agree on configuration.
+if (CITRON_ENABLE_TRACY AND NOT TARGET Tracy::TracyClient)
+    set(TRACY_ENABLE ON CACHE BOOL "Enable Tracy client" FORCE)
+    set(TRACY_ON_DEMAND ON CACHE BOOL "Collect Tracy data only while a profiler is connected" FORCE)
+    set(TRACY_NO_EXIT ON CACHE BOOL "Do not call exit() from the Tracy client" FORCE)
+    if (CITRON_ENABLE_LTO)
+        set(TRACY_NO_LTO ON CACHE BOOL "Disable LTO on TracyClient when the main project uses LTO" FORCE)
+    endif()
+    set(_tracy_cpm_options
+        "TRACY_ENABLE ON"
+        "TRACY_ON_DEMAND ON"
+        "TRACY_NO_EXIT ON"
+        "TRACY_NO_BROADCAST ON"
+        "TRACY_NO_VSYNC_CAPTURE ON"
+        "TRACY_NO_FRAME_IMAGE ON"
+        "TRACY_FIBERS ON"
+        # NOTE: TRACY_CALLSTACK is NOT passed here because Tracy's set_option() macro
+        # only supports boolean ON/OFF via CMake option(), which would produce
+        # -DTRACY_CALLSTACK with no value.  Tracy uses TRACY_CALLSTACK as an integer
+        # (callstack depth) in all zone macros.  We set it to 15 via
+        # target_compile_definitions below after CPMAddPackage completes.
+    )
+    if (CITRON_ENABLE_LTO)
+        list(APPEND _tracy_cpm_options "TRACY_NO_LTO ON")
+    endif()
+    CPMAddPackage(
+        NAME TracyClient
+        GITHUB_REPOSITORY wolfpld/tracy
+        GIT_TAG v0.13.1
+        OPTIONS
+            ${_tracy_cpm_options}
+    )
+    unset(_tracy_cpm_options)
+    if (TARGET TracyClient)
+        # Ensure LTO is completely disabled on the TracyClient library to avoid toolchain mismatches during PGO builds
+        set_target_properties(TracyClient PROPERTIES INTERPROCEDURAL_OPTIMIZATION FALSE)
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+            target_compile_options(TracyClient PRIVATE
+                "-fno-lto"
+                "-fno-profile-generate"
+                "-fno-profile-use"
+                "-fno-profile-instr-generate"
+                "-fno-profile-instr-use"
+                "-fno-cs-profile-generate"
+            )
+        endif()
+        # Set callstack depth to 15 frames.  Must be done as a direct
+        # target_compile_definitions call with a numeric value because Tracy's
+        # CMakeLists.txt set_option() macro uses option() (boolean only) and
+        # would produce -DTRACY_CALLSTACK with no value if passed via OPTIONS above.
+        target_compile_definitions(TracyClient PUBLIC TRACY_CALLSTACK=15)
+        if (NOT TARGET Tracy::TracyClient)
+            add_library(Tracy::TracyClient ALIAS TracyClient)
+        endif()
+    endif()
+    message(STATUS "[Tracy] Profiling enabled (TRACY_ON_DEMAND=ON, callstacks=15, fibers)")
+endif()
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Qt
 # ═══════════════════════════════════════════════════════════════════════════════

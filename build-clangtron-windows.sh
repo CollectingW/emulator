@@ -162,6 +162,7 @@
 #     --release                Release build (default)
 #     --relwithdebinfo         RelWithDebInfo (adds -g, keeps O3/LTO/PGO)
 #     --unity                  Unity builds (~30-90% faster compile, no runtime effect)
+#     --tracy                  Enable Tracy profiler instrumentation (default off)
 #     --clang-version N        Host Clang version (default: 21)
 #     --llvm-mingw-version VER llvm-mingw release tag (default: 20260224)
 #
@@ -219,6 +220,7 @@ JOBS="${JOBS:-$(nproc)}"
 LTO_MODE="${LTO_MODE:-full}"
 PGO_MODE="${PGO_MODE:-ir}"          # ir|fe|none
 UNITY_BUILD="${UNITY_BUILD:-OFF}"   # ENABLE_UNITY_BUILD
+TRACY_BUILD="${TRACY_BUILD:-OFF}"   # CITRON_ENABLE_TRACY
 BUILD_TYPE="${BUILD_TYPE:-Release}" # Release|RelWithDebInfo
 CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE:-${HOME}/.cache/cpm}"
 CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE/#\~/$HOME}"
@@ -1985,6 +1987,7 @@ build_common_cmake_args() {
         "-DCMAKE_C_FLAGS=${MARCH_NATIVE}"
         "-DCMAKE_CXX_FLAGS=${MARCH_NATIVE}"
     )
+    _CMAKE_ARGS+=("-DCITRON_ENABLE_TRACY=${TRACY_BUILD}")
     # Always return 0 — a trailing [[ ]] that evaluates false would trigger set -e in caller.
     :
 }
@@ -4787,6 +4790,10 @@ while [[ $# -gt 0 ]]; do
             UNITY_BUILD="ON"; shift ;;
         --no-unity)
             UNITY_BUILD="OFF"; shift ;;
+        --tracy)
+            TRACY_BUILD="ON"; shift ;;
+        --no-tracy)
+            TRACY_BUILD="OFF"; shift ;;
         --clang-version)
             CLANG_VERSION="$2"
             CLANG="clang-${CLANG_VERSION}"

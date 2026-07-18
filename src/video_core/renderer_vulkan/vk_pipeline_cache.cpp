@@ -13,6 +13,7 @@
 #include "common/cityhash.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
+#include "common/profiling.h"
 #include "common/settings.h"
 #include "common/thread_worker.h"
 #include "core/core.h"
@@ -604,6 +605,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         file.read(reinterpret_cast<char*>(&key), sizeof(key));
 
         workers.QueueWork([this, key, env_ = std::move(env), &state, &callback]() mutable {
+            CITRON_PROFILE_SCOPE("Vulkan::PipelineCacheWorker");
             ShaderPools pools;
             auto pipeline{CreateComputePipeline(pools, key, env_, state.statistics.get(), false)};
             std::scoped_lock lock{state.mutex};
@@ -643,6 +645,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
             return;
         }
         workers.QueueWork([this, key, envs_ = std::move(envs), &state, &callback]() mutable {
+            CITRON_PROFILE_SCOPE("Vulkan::PipelineCacheWorker");
             ShaderPools pools;
             boost::container::static_vector<Shader::Environment*, 5> env_ptrs;
             for (auto& env : envs_) {
@@ -856,6 +859,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
         return pipeline;
     }
     serialization_thread.QueueWork([this, key = graphics_key, envs = std::move(environments.envs)] {
+        CITRON_PROFILE_SCOPE("Vulkan::PipelineCacheSerialize");
         boost::container::static_vector<const GenericEnvironment*,
                                         Tegra::Engines::Maxwell3D::Regs::MaxShaderProgram>
             env_ptrs;
@@ -882,6 +886,7 @@ std::unique_ptr<ComputePipeline> PipelineCache::CreateComputePipeline(
         return pipeline;
     }
     serialization_thread.QueueWork([this, key, env_ = std::move(env)] {
+        CITRON_PROFILE_SCOPE("Vulkan::PipelineCacheSerialize");
         SerializePipeline(key, std::array<const GenericEnvironment*, 1>{&env_},
                           pipeline_cache_filename, CACHE_VERSION);
     });

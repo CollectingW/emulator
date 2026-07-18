@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "common/logging.h"
+#include "common/profiling.h"
 #include <ranges>
 #include "common/settings.h"
 #include "core/core.h"
@@ -181,6 +182,7 @@ bool Swapchain::AcquireNextImage() {
 }
 
 void Swapchain::Present(VkSemaphore render_semaphore) {
+    CITRON_PROFILE_SCOPE("Vulkan::Present");
     const auto present_queue{device.GetPresentQueue()};
     const VkPresentInfoKHR present_info{
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
