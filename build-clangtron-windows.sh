@@ -3562,8 +3562,8 @@ BOLT_ORDER_EOF
         order_linker_flag="-Wl,-Xlink=/order:@${order_file} -Wl,-Xlink=/ignore:4037"
     fi
 
-    local qt_install_dir="${BUILD_GENERATE}/externals/qt/6.9.3/llvm-mingw_64"
-    local qt_host_dir="${BUILD_GENERATE}/externals/qt-host/6.9.3/gcc_64"
+    local qt_install_dir="${CPM_SOURCE_CACHE}/qt-bin/6.9.3/llvm-mingw_64"
+    local qt_host_dir="${CPM_SOURCE_CACHE}/qt-bin-host/6.9.3/gcc_64"
     if [[ "${_HOST_OS}" == "windows" ]]; then
         qt_host_dir=""
     fi
@@ -4400,7 +4400,8 @@ stage_clangcl() {
             pgo_flags_dash="-fprofile-generate=${default_profraw_name_generate}"
             ;;
         fe:use|ir:use)
-            # Profile priority: merged.profdata (stage1+CS) → default.profdata (stage1) → profraw merge.
+            # Profile priority: merged.profdata (stage1+CS, ir only) → clang-cl-<mode>.profdata (stage1) →
+            # default.profdata (ir-only fallback input) → profraw merge.
             # If merged.profdata is stale (new CS profraw arrived), remove it so it gets rebuilt.
             #
             # BUG FIX: all derived filenames below are PGO_MODE-specific
@@ -4421,13 +4422,22 @@ stage_clangcl() {
             local stage1_pd_default="${PROFILE_DIR}/default.profdata"
             local profdata_use
 
-            # Fall back to default.profdata when clang-cl-<mode>.profdata is
-            # absent. default.profdata is the llvm-mingw path's own merge
-            # output name and was never mode-specific there either -- only
-            # trust it as an ir-mode fallback (matching its only historical
-            # use), not for fe.
+            # BUG FIX: stage1_pd is the CANONICAL output path and must never be
+            # reassigned -- every merge below writes to it, and the freshness
+            # check below is only ever allowed to delete files this stage owns
+            # (stage1_pd, merged_pd). default.profdata is a foreign file (the
+            # llvm-mingw path's own merge output) that must only ever be READ
+            # here, never written or deleted. stage1_pd_input tracks which
+            # file to actually read as stage1 data -- it may point at the
+            # fallback; stage1_pd itself never does.
+            local stage1_pd_input="${stage1_pd}"
+            # Fall back to default.profdata (as INPUT only) when
+            # clang-cl-<mode>.profdata is absent. default.profdata is the
+            # llvm-mingw path's own merge output name and was never
+            # mode-specific there either -- only trust it as an ir-mode
+            # fallback (matching its only historical use), not for fe.
             if [[ "${PGO_MODE}" == "ir" && ! -f "${stage1_pd}" && -f "${stage1_pd_default}" ]]; then
-                stage1_pd="${stage1_pd_default}"
+                stage1_pd_input="${stage1_pd_default}"
             fi
 
             # BUG FIX: raw profraw files are named citron-generate-<mode>-<pid>.profraw
@@ -4437,25 +4447,40 @@ stage_clangcl() {
             # meaningless) profdata if both ever existed in PROFILE_DIR at once.
             local _raw_glob_pattern="citron-generate-${PGO_MODE}-*.profraw"
 
-            # BUG FIX: freshness check. Reusing an existing stage1_pd purely because
-            # the file exists (the old behavior) ignores whether a newer generate
-            # cycle has since produced newer raw profraw data -- e.g. re-running
-            # generate after a code change, then running use, previously could
-            # silently consume the OLD merged profile instead of the new raw data.
-            # If any matching raw file is newer than stage1_pd, treat it as stale.
-            if [[ -f "${stage1_pd}" ]]; then
-                normalize_profraw_dirs "${PROFILE_DIR}" 2>/dev/null || true
-                local _newer_raw
-                _newer_raw=$(find "${PROFILE_DIR}" -maxdepth 1 -name "${_raw_glob_pattern}" -newer "${stage1_pd}" 2>/dev/null | head -1)
-                if [[ -n "${_newer_raw}" ]]; then
-                    warn "Newer raw profile data found (e.g. ${_newer_raw}) than" \
-                         "${stage1_pd}."
-                    warn "Removing stale stage1/merged profdata and re-merging..."
-                    rm -f "${stage1_pd}" "${merged_pd}"
+            # BUG FIX: freshness check now covers stage1_pd_input AND merged_pd
+            # independently (previously gated entirely behind `-f stage1_pd`,
+            # so if only merged_pd still existed -- e.g. stage1_pd had already
+            # been consumed/removed by an earlier run -- newer raw data would
+            # never invalidate it). Only ever removes files this stage owns
+            # (stage1_pd, merged_pd); default.profdata is never deleted even
+            # if it's the stale one -- we just stop trusting it as input and
+            # fall through to rebuilding stage1_pd from raw data instead.
+            normalize_profraw_dirs "${PROFILE_DIR}" 2>/dev/null || true
+            local _derived_pd _newer_raw
+            for _derived_pd in "${stage1_pd_input}" "${merged_pd}"; do
+                [[ -f "${_derived_pd}" ]] || continue
+                _newer_raw=$(find "${PROFILE_DIR}" -maxdepth 1 -name "${_raw_glob_pattern}" -newer "${_derived_pd}" 2>/dev/null | head -1)
+                [[ -n "${_newer_raw}" ]] || continue
+                warn "Newer raw profile data found (e.g. ${_newer_raw}) than" \
+                     "${_derived_pd}."
+                if [[ "${_derived_pd}" == "${stage1_pd_default}" ]]; then
+                    warn "Not deleting ${stage1_pd_default} (owned by the llvm-mingw path)" \
+                         "-- rebuilding ${stage1_pd} from raw data instead."
+                    stage1_pd_input="${stage1_pd}"
+                else
+                    warn "Removing stale ${_derived_pd} and re-merging..."
+                    rm -f "${_derived_pd}"
                 fi
-            fi
+            done
 
-            if [[ -f "${merged_pd}" ]]; then
+            # BUG FIX: CS-IRPGO is exclusively an ir-mode concept (csgenerate
+            # always requires --pgo ir, enforced elsewhere) -- fe-mode sessions
+            # must never look at PROFILE_DIR/cs or attempt to build/consume a
+            # clang-cl-fe-merged.profdata. Without this guard, an fe-mode use
+            # run could pick up CS profraw left over from an earlier, unrelated
+            # ir-mode csgenerate session and merge incompatible profile data
+            # together.
+            if [[ "${PGO_MODE}" == "ir" && -f "${merged_pd}" ]]; then
                 local _cs_dir_check="${PROFILE_DIR}/cs"
                 normalize_profraw_dirs "${_cs_dir_check}" 2>/dev/null || true
                 local _cs_pending
@@ -4469,33 +4494,36 @@ stage_clangcl() {
                 fi
             fi
 
-            if [[ -f "${merged_pd}" ]]; then
+            if [[ "${PGO_MODE}" == "ir" && -f "${merged_pd}" ]]; then
                 profdata_use="${merged_pd}"
                 info "Using CS-IRPGO merged profile: ${profdata_use}"
-            elif [[ -f "${stage1_pd}" ]]; then
-                # Check whether CS profraw exists and needs merging
-                local cs_dir="${PROFILE_DIR}/cs"
-                normalize_profraw_dirs "${cs_dir}" 2>/dev/null || true
-                local cs_count
-                cs_count=$(find "${cs_dir}" -maxdepth 1 -name "*.profraw" \
-                           2>/dev/null | wc -l)
+            elif [[ -f "${stage1_pd_input}" ]]; then
+                # Check whether CS profraw exists and needs merging (ir only)
+                local cs_count=0
+                if [[ "${PGO_MODE}" == "ir" ]]; then
+                    local cs_dir="${PROFILE_DIR}/cs"
+                    normalize_profraw_dirs "${cs_dir}" 2>/dev/null || true
+                    cs_count=$(find "${cs_dir}" -maxdepth 1 -name "*.profraw" \
+                               2>/dev/null | wc -l)
+                fi
                 if [[ "${cs_count}" -gt 0 ]]; then
                     info "CS profraw detected (${cs_count} files) — merging with stage1..."
                     local cs_tmp="${PROFILE_DIR}/clang-cl-${PGO_MODE}-cs-only.profdata"
                     "${llvm_profdata}" merge -output="${cs_tmp}" "${cs_dir}"/*.profraw ||
                         error "llvm-profdata CS merge failed."
                     "${llvm_profdata}" merge -output="${merged_pd}" \
-                        "${stage1_pd}" "${cs_tmp}" ||
+                        "${stage1_pd_input}" "${cs_tmp}" ||
                         error "llvm-profdata stage1+CS merge failed."
                     rm -f "${cs_tmp}"
                     profdata_use="${merged_pd}"
                     info "CS-IRPGO merged profile written: ${profdata_use}"
                 else
-                    profdata_use="${stage1_pd}"
+                    profdata_use="${stage1_pd_input}"
                     info "Using stage1 profile (no CS data): ${profdata_use}"
                 fi
             else
-                # On-the-fly merge from raw files
+                # On-the-fly merge from raw files -- ALWAYS writes to the
+                # canonical stage1_pd, never to stage1_pd_default.
                 normalize_profraw_dirs "${PROFILE_DIR}" 2>/dev/null || true
                 local raw=("${PROFILE_DIR}"/${_raw_glob_pattern})
                 [[ -e "${raw[0]}" ]] || error \
