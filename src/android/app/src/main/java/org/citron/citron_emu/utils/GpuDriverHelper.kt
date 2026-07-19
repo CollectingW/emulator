@@ -21,6 +21,8 @@ object GpuDriverHelper {
     private var fileRedirectionPath: String? = null
     var driverInstallationPath: String? = null
     private var hookLibPath: String? = null
+    private var systemDriverInfoLoaded = false
+    private var cachedSystemDriverInfo: Array<String>? = null
 
     val driverStoragePath get() = DirectoryInitialization.userDirectory!! + "/gpu_drivers/"
 
@@ -197,9 +199,27 @@ object GpuDriverHelper {
 
     external fun supportsCustomDriverLoading(): Boolean
 
-    external fun getSystemDriverInfo(
-        surface: Surface = Surface(SurfaceTexture(true)),
-        hookLibPath: String = GpuDriverHelper.hookLibPath!!
+    @Synchronized
+    fun getSystemDriverInfo(): Array<String>? {
+        if (systemDriverInfoLoaded) {
+            return cachedSystemDriverInfo?.clone()
+        }
+
+        val surfaceTexture = SurfaceTexture(true)
+        val surface = Surface(surfaceTexture)
+        try {
+            cachedSystemDriverInfo = getSystemDriverInfoNative(surface, hookLibPath!!)
+            systemDriverInfoLoaded = true
+        } finally {
+            surface.release()
+            surfaceTexture.release()
+        }
+        return cachedSystemDriverInfo?.clone()
+    }
+
+    private external fun getSystemDriverInfoNative(
+        surface: Surface,
+        hookLibPath: String
     ): Array<String>?
 
     // Parse the custom driver metadata to retrieve the name.

@@ -7,6 +7,7 @@
 #include <array>
 #include <bit>
 #include <memory>
+#include <mutex>
 #include <ranges>
 #include <string_view>
 
@@ -40,12 +41,26 @@ consteval std::pair<u64, u64> MaskValueFromEncoding(const char data[20]) noexcep
     return { mask, value };
 }
 
-Opcode Decode(u64 insn) {
+std::optional<Opcode> TryDecode(u64 insn) {
 #define INST(name, cute, encode) \
     if (auto const p = MaskValueFromEncoding(encode); (insn & p.first) == p.second) \
         return Opcode::name;
 #include "maxwell.inc"
 #undef INST
+    return std::nullopt;
+}
+
+Opcode Decode(u64 insn) {
+    if (const std::optional<Opcode> opcode = TryDecode(insn)) {
+        return *opcode;
+    }
+    if (insn == 0) [[unlikely]] {
+        static std::once_flag zero_instruction_log_once;
+        std::call_once(zero_instruction_log_once, [] {
+            LOG_DEBUG(Debug, "Invalid zero instruction; decoding as NOP");
+        });
+        return Opcode::NOP;
+    }
     ASSERT_MSG(false, "Invalid insn 0x{:016x}", insn);
     return Opcode::NOP;
 }

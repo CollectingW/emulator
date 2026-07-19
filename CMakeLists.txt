@@ -79,13 +79,9 @@ option(CITRON_USE_QT_MULTIMEDIA "Use QtMultimedia for Camera" OFF)
 
 option(CITRON_USE_QT_WEB_ENGINE "Use QtWebEngine for web applet implementation" OFF)
 
-option(CITRON_USE_AUTO_UPDATER "Enable automatic updater functionality" OFF)
-
 option(ENABLE_UNITY_BUILD "Enables the unity build" OFF)
 
 option(ENABLE_CUBEB "Enables the cubeb audio backend" ON)
-
-option(USE_DISCORD_PRESENCE "Enables Discord Rich Presence" OFF)
 
 option(CITRON_TESTS "Compile tests" "${BUILD_TESTING}")
 
@@ -473,10 +469,6 @@ if (ENABLE_CUBEB)
     endif()
 endif()
 
-if (USE_DISCORD_PRESENCE)
-    find_package(DiscordRPC MODULE)
-endif()
-
 if (ENABLE_WEB_SERVICE)
     if (NOT TARGET cpp-jwt::cpp-jwt)
         find_package(cpp-jwt 1.4 CONFIG)
@@ -507,34 +499,25 @@ endif()
 
 # CPM dependencies are loaded above (before find_package calls).
 
+# This function must be available to targets created by externals.
+function(create_target_directory_groups target_name)
+    # Place any files that aren't in the source list in a separate group so that they don't get in
+    # the way.
+    source_group("Other Files" REGULAR_EXPRESSION ".")
+
+    get_target_property(target_sources "${target_name}" SOURCES)
+
+    foreach(file_name IN LISTS target_sources)
+        get_filename_component(dir_name "${file_name}" PATH)
+        # Group names use '\' as a separator even though the entire rest of CMake uses '/'...
+        string(REPLACE "/" "\\" group_name "${dir_name}")
+        source_group("${group_name}" FILES "${file_name}")
+    endforeach()
+endfunction()
+
 add_subdirectory(externals)
-# When CPM is ON, discord-rpc and dynarmic/mcl patches are applied post-populate
+# When CPM is ON, dynarmic/mcl patches are applied post-populate
 # inside CMakeModules/dependencies.cmake. Skip the submodule-path patches.
-if(USE_DISCORD_PRESENCE AND NOT CITRON_USE_CPM)
-    message(STATUS "Applying custom patch to submodule's rapidjson for Discord presence...")
-
-    # Define the path to the patch file and the target directory
-    set(PATCH_FILE "${CMAKE_CURRENT_SOURCE_DIR}/patches/rapidjson-compiler-fix.patch")
-    set(PATCH_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/externals/discord-rpc/thirdparty/rapidjson-1.1.0")
-
-    # Check if the target directory exists before trying to patch
-    if(EXISTS "${PATCH_TARGET_DIR}")
-        execute_process(
-            COMMAND git apply --ignore-whitespace "${PATCH_FILE}"
-            WORKING_DIRECTORY "${PATCH_TARGET_DIR}"
-            RESULT_VARIABLE PATCH_RESULT
-            OUTPUT_QUIET
-            ERROR_QUIET
-        )
-
-        if(NOT PATCH_RESULT EQUAL 0)
-            message(WARNING "Failed to apply rapidjson compiler fix patch! This might be okay if it's already applied.")
-        endif()
-    else()
-        message(WARNING "Could not find rapidjson directory to patch. It may not have been downloaded yet.")
-    endif()
-endif()
-
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT CITRON_USE_CPM)
     message(STATUS "Applying custom patch to submodule's mcl for Clang compatibility...")
 
@@ -582,33 +565,6 @@ else()
     message(WARNING "Could not find stb_image.h to patch. It may not have been downloaded yet.")
 endif()
 
-# Apply a patch to discord-rpc's CMakeLists.txt to suppress -Wclass-memaccess
-# (skipped when CPM is ON — patches applied in CMakeModules/dependencies.cmake)
-if(NOT CITRON_USE_CPM)
-    message(STATUS "Applying custom patch to submodule's discord-rpc CMakeLists.txt...")
-
-    # Define the path to the patch file and the target directory using unique names
-    set(DISCORD_RPC_PATCH_FILE "${CMAKE_CURRENT_SOURCE_DIR}/patches/discord-rpc-wclass-memaccess-fix.patch")
-    set(DISCORD_RPC_PATCH_TARGET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/externals/discord-rpc")
-
-    # Check if the target directory exists before trying to patch
-    if(EXISTS "${DISCORD_RPC_PATCH_TARGET_DIR}")
-        execute_process(
-            COMMAND git apply -p0 --ignore-whitespace "${DISCORD_RPC_PATCH_FILE}"
-            WORKING_DIRECTORY "${DISCORD_RPC_PATCH_TARGET_DIR}"
-            RESULT_VARIABLE PATCH_RESULT
-            OUTPUT_QUIET
-            ERROR_QUIET
-        )
-
-        if(NOT PATCH_RESULT EQUAL 0)
-            message(WARNING "Failed to apply discord-rpc CMakeLists.txt patch! This might be okay if it's already applied.")
-        endif()
-    else()
-        message(WARNING "Could not find discord-rpc directory to patch. It may not have been downloaded yet.")
-    endif()
-endif()
-
 if (ENABLE_QT AND NOT CITRON_USE_CPM)
     if (NOT USE_SYSTEM_QT)
         download_qt(6.9.3)
@@ -651,7 +607,17 @@ if (ENABLE_QT AND NOT CITRON_USE_CPM)
         message(STATUS "Using host Qt at ${QT_HOST_PATH}")
     endif()
 
-    find_package(Qt6 REQUIRED COMPONENTS Widgets Multimedia Concurrent)
+    # Early Qt6 discovery: find Widgets and Concurrent unconditionally; add
+    # Multimedia only when CITRON_USE_QT_MULTIMEDIA is ON.  This makes the
+    # cmake flag actually functional: with CITRON_USE_QT_MULTIMEDIA=OFF the
+    # Multimedia module and its shared FFmpeg backend (libffmpegmediaplugin.so,
+    # libavcodec.so.61 ~80 MB, etc.) are not linked at all.
+    set(_qt_probe_components Widgets Concurrent)
+    if (CITRON_USE_QT_MULTIMEDIA)
+        list(APPEND _qt_probe_components Multimedia)
+    endif()
+    find_package(Qt6 REQUIRED COMPONENTS ${_qt_probe_components})
+    unset(_qt_probe_components)
 
     if (UNIX AND NOT APPLE)
         find_package(Qt6 REQUIRED COMPONENTS DBus)
@@ -831,24 +797,6 @@ endif()
 
 # Include source code
 # ===================
-
-# This function should be passed a list of all files in a target. It will automatically generate
-# file groups following the directory hierarchy, so that the layout of the files in IDEs matches the
-# one in the filesystem.
-function(create_target_directory_groups target_name)
-    # Place any files that aren't in the source list in a separate group so that they don't get in
-    # the way.
-    source_group("Other Files" REGULAR_EXPRESSION ".")
-
-    get_target_property(target_sources "${target_name}" SOURCES)
-
-    foreach(file_name IN LISTS target_sources)
-        get_filename_component(dir_name "${file_name}" PATH)
-        # Group names use '\' as a separator even though the entire rest of CMake uses '/'...
-        string(REPLACE "/" "\\" group_name "${dir_name}")
-        source_group("${group_name}" FILES "${file_name}")
-    endforeach()
-endfunction()
 
 # Helper function to configure LTO for a target with CachyOS-specific compatibility
 function(citron_configure_lto target_name)

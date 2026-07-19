@@ -147,6 +147,7 @@ EmulationSession::EmulationSession() {
 }
 
 EmulationSession::~EmulationSession() {
+    SetNativeWindow(nullptr);
     if (m_network_initialized) {
         m_system.GetRoomNetwork().Shutdown();
     }
@@ -180,11 +181,19 @@ EmuWindow_Android& EmulationSession::Window() {
     return *m_window;
 }
 
-ANativeWindow* EmulationSession::NativeWindow() const {
-    return m_native_window;
-}
-
 void EmulationSession::SetNativeWindow(ANativeWindow* native_window) {
+    std::scoped_lock lock(m_window_mutex);
+    if (m_native_window == native_window) {
+        // ANativeWindow_fromSurface acquires a reference even when it returns the same pointer.
+        // Keep the reference already owned by the session and release the duplicate.
+        if (native_window != nullptr) {
+            ANativeWindow_release(native_window);
+        }
+        return;
+    }
+    if (m_native_window != nullptr) {
+        ANativeWindow_release(m_native_window);
+    }
     m_native_window = native_window;
 }
 
@@ -228,6 +237,10 @@ bool EmulationSession::IsPaused() const {
     return m_is_running && m_is_paused;
 }
 
+bool EmulationSession::IsShuttingDown() const {
+    return m_is_shutting_down;
+}
+
 bool EmulationSession::IsNetworkInitialized() const {
     return m_network_initialized;
 }
@@ -238,7 +251,8 @@ const Core::PerfStatsResults& EmulationSession::PerfStats() {
 }
 
 void EmulationSession::SurfaceChanged() {
-    if (!IsRunning()) {
+    std::scoped_lock lock(m_window_mutex);
+    if (!IsRunning() || m_window == nullptr || m_native_window == nullptr) {
         return;
     }
     m_window->OnSurfaceChanged(m_native_window);
@@ -374,10 +388,15 @@ void EmulationSession::SetAppletId(int applet_id) {
 Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string& filepath,
                                                                const std::size_t program_index,
                                                                const bool frontend_initiated) {
-    std::scoped_lock lock(m_mutex);
+    std::unique_lock lock(m_mutex);
+    m_session_cv.wait(lock, [this] { return !m_session_active; });
+    m_session_active = true;
 
     // Create the render window.
-    m_window = std::make_unique<EmuWindow_Android>(m_native_window, m_vulkan_library);
+    {
+        std::scoped_lock window_lock(m_window_mutex);
+        m_window = std::make_unique<EmuWindow_Android>(m_native_window, m_vulkan_library);
+    }
 
     // Initialize system.
     jauto android_keyboard = std::make_unique<Common::Android::SoftwareKeyboard::AndroidKeyboard>();
@@ -430,7 +449,13 @@ Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string
 }
 
 void EmulationSession::ShutdownEmulation() {
+    m_is_shutting_down = true;
     std::scoped_lock lock(m_mutex);
+    SCOPE_EXIT {
+        m_session_active = false;
+        m_is_shutting_down = false;
+        m_session_cv.notify_all();
+    };
 
     if (m_next_program_index != -1) {
         ChangeProgram(m_next_program_index);
@@ -438,6 +463,7 @@ void EmulationSession::ShutdownEmulation() {
     }
 
     m_is_running = false;
+    m_is_paused = false;
 
     // Unload user input.
     m_system.HIDCore().UnloadInputDevices();
@@ -451,13 +477,19 @@ void EmulationSession::ShutdownEmulation() {
         m_system.ShutdownMainProcess();
         m_detached_tasks.WaitForAllTasks();
         m_load_result = Core::SystemResultStatus::ErrorNotInitialized;
-        m_window.reset();
+        {
+            std::scoped_lock window_lock(m_window_mutex);
+            m_window.reset();
+        }
         OnEmulationStopped(Core::SystemResultStatus::Success);
         return;
     }
 
     // Tear down the render window.
-    m_window.reset();
+    {
+        std::scoped_lock window_lock(m_window_mutex);
+        m_window.reset();
+    }
 }
 
 void EmulationSession::PauseEmulation() {
@@ -474,6 +506,7 @@ void EmulationSession::UnPauseEmulation() {
 
 void EmulationSession::HaltEmulation() {
     std::scoped_lock lock(m_mutex);
+    m_is_shutting_down = true;
     m_is_running = false;
     m_cv.notify_one();
 }
@@ -481,6 +514,7 @@ void EmulationSession::HaltEmulation() {
 void EmulationSession::RunEmulation() {
     {
         std::scoped_lock lock(m_mutex);
+        m_is_paused = false;
         m_is_running = true;
     }
 
@@ -585,7 +619,6 @@ void Java_org_citron_citron_1emu_NativeLibrary_surfaceChanged(JNIEnv* env, jobje
 }
 
 void Java_org_citron_citron_1emu_NativeLibrary_surfaceDestroyed(JNIEnv* env, jobject instance) {
-    ANativeWindow_release(EmulationSession::GetInstance().NativeWindow());
     EmulationSession::GetInstance().SetNativeWindow(nullptr);
     EmulationSession::GetInstance().SurfaceChanged();
 }
@@ -666,7 +699,7 @@ jboolean JNICALL Java_org_citron_citron_1emu_utils_GpuDriverHelper_supportsCusto
 #endif
 }
 
-jobjectArray Java_org_citron_citron_1emu_utils_GpuDriverHelper_getSystemDriverInfo(
+jobjectArray Java_org_citron_citron_1emu_utils_GpuDriverHelper_getSystemDriverInfoNative(
     JNIEnv* env, jobject j_obj, jobject j_surf, jstring j_hook_lib_dir) {
     const char* file_redirect_dir_{};
     int featureFlags{};
@@ -674,9 +707,13 @@ jobjectArray Java_org_citron_citron_1emu_utils_GpuDriverHelper_getSystemDriverIn
     auto handle = adrenotools_open_libvulkan(RTLD_NOW, featureFlags, nullptr, hook_lib_dir.c_str(),
                                              nullptr, nullptr, file_redirect_dir_, nullptr);
     auto driver_library = std::make_shared<Common::DynamicLibrary>(handle);
-    InputCommon::InputSubsystem input_subsystem;
-    auto window =
-        std::make_unique<EmuWindow_Android>(ANativeWindow_fromSurface(env, j_surf), driver_library);
+    ANativeWindow* const native_window = ANativeWindow_fromSurface(env, j_surf);
+    SCOPE_EXIT {
+        if (native_window != nullptr) {
+            ANativeWindow_release(native_window);
+        }
+    };
+    auto window = std::make_unique<EmuWindow_Android>(native_window, driver_library);
 
     Vulkan::vk::InstanceDispatch dld;
     Vulkan::vk::Instance vk_instance = Vulkan::CreateInstance(
@@ -724,7 +761,8 @@ void Java_org_citron_citron_1emu_NativeLibrary_stopEmulation(JNIEnv* env, jclass
 }
 
 jboolean Java_org_citron_citron_1emu_NativeLibrary_isRunning(JNIEnv* env, jclass clazz) {
-    return static_cast<jboolean>(EmulationSession::GetInstance().IsRunning());
+    const auto& session = EmulationSession::GetInstance();
+    return static_cast<jboolean>(session.IsRunning() || session.IsShuttingDown());
 }
 
 jboolean Java_org_citron_citron_1emu_NativeLibrary_isPaused(JNIEnv* env, jclass clazz) {
@@ -964,7 +1002,7 @@ jobjectArray Java_org_citron_citron_1emu_NativeLibrary_getPatchesForFile(JNIEnv*
             Common::Android::ToJString(env, patch.name),
             Common::Android::ToJString(env, patch.version), static_cast<jint>(patch.type),
             Common::Android::ToJString(env, std::to_string(patch.program_id)),
-            Common::Android::ToJString(env, std::to_string(patch.title_id)));
+            Common::Android::ToJString(env, std::to_string(patch.title_id)), patch.removable);
         env->SetObjectArrayElement(jpatchArray, i, jpatch);
         ++i;
     }
@@ -1004,7 +1042,7 @@ jobjectArray Java_org_citron_citron_1emu_NativeLibrary_getCheatsForFile(JNIEnv* 
         jobject jpatch = env->NewObject(
             Common::Android::GetPatchClass(), Common::Android::GetPatchConstructor(), cheat.enabled,
             jname, jversion, static_cast<jint>(FileSys::PatchType::Cheat), jpatchProgramId,
-            jbuildId);
+            jbuildId, false);
         env->SetObjectArrayElement(jpatchArray, i, jpatch);
         env->DeleteLocalRef(jpatch);
         env->DeleteLocalRef(jname);
@@ -1080,9 +1118,10 @@ void Java_org_citron_citron_1emu_NativeLibrary_removeUpdate(JNIEnv* env, jobject
 }
 
 void Java_org_citron_citron_1emu_NativeLibrary_removeDLC(JNIEnv* env, jobject jobj,
-                                                     jstring jprogramId) {
-    auto program_id = EmulationSession::GetProgramId(env, jprogramId);
-    ContentManager::RemoveAllDLC(EmulationSession::GetInstance().System(), program_id);
+                                                     jstring jtitleId) {
+    const auto title_id = EmulationSession::GetProgramId(env, jtitleId);
+    ContentManager::RemoveDLC(
+        EmulationSession::GetInstance().System().GetFileSystemController(), title_id);
 }
 
 void Java_org_citron_citron_1emu_NativeLibrary_removeMod(JNIEnv* env, jobject jobj, jstring jprogramId,

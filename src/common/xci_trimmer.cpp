@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cctype>
 #include <array>
 #include <cstring>
 
@@ -100,7 +101,7 @@ bool XCITrimmer::ReadHeader() {
                 return false;
             }
 
-            if (magic != MAGIC_VALUE) {
+            if (magic != MAGIC_VALUE && magic != MAGIC_VALUE_DECRYPTED) {
                 return false;
             }
 
@@ -413,8 +414,10 @@ XCITrimmer::OperationOutcome XCITrimmer::Trim(ProgressCallback progress_callback
 }
 
 bool XCITrimmer::CanTrim(const std::filesystem::path& path) {
-    const auto extension = path.extension().string();
-    if (extension != ".xci" && extension != ".XCI") {
+    auto extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    if (extension != ".xci" && extension != ".dxci") {
         return false;
     }
 

@@ -460,35 +460,6 @@ if ((ARCHITECTURE_x86_64 OR ARCHITECTURE_arm64) AND NOT (MSVC AND ARCHITECTURE_a
     endif()
 endif()
 
-# ── discord-rpc (yuzu-mirror fork) ───────────────────────────────────────────
-if (USE_DISCORD_PRESENCE AND NOT TARGET DiscordRPC::discord-rpc)
-    CPMAddPackage(
-        NAME discord-rpc
-        GITHUB_REPOSITORY yuzu-mirror/discord-rpc
-        GIT_TAG 20cc99aeffa08a4834f156b6ab49ed68618cf94a
-        OPTIONS "BUILD_EXAMPLES OFF"
-    )
-    if (discord-rpc_ADDED)
-        execute_process(
-            COMMAND git apply --ignore-whitespace
-                    "${CMAKE_SOURCE_DIR}/patches/rapidjson-compiler-fix.patch"
-            WORKING_DIRECTORY "${discord-rpc_SOURCE_DIR}/thirdparty/rapidjson-1.1.0"
-            RESULT_VARIABLE _rj_patch OUTPUT_QUIET ERROR_QUIET
-        )
-        execute_process(
-            COMMAND git apply -p0 --ignore-whitespace
-                    "${CMAKE_SOURCE_DIR}/patches/discord-rpc-wclass-memaccess-fix.patch"
-            WORKING_DIRECTORY "${discord-rpc_SOURCE_DIR}"
-            RESULT_VARIABLE _dr_patch OUTPUT_QUIET ERROR_QUIET
-        )
-    endif()
-    if (TARGET discord-rpc AND NOT TARGET DiscordRPC::discord-rpc)
-        target_include_directories(discord-rpc INTERFACE
-            $<BUILD_INTERFACE:${discord-rpc_SOURCE_DIR}/include>)
-        add_library(DiscordRPC::discord-rpc ALIAS discord-rpc)
-    endif()
-endif()
-
 # ── breakpad (yuzu-mirror fork) ───────────────────────────────────────────────
 # Has no usable CMakeLists of its own.  Fetched with DOWNLOAD_ONLY so the
 # source is available; externals/CMakeLists.txt contains the build rules and

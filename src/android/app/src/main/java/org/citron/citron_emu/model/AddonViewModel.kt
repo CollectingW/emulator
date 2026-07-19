@@ -65,7 +65,7 @@ class AddonViewModel : ViewModel() {
     fun onDeleteAddon(patch: Patch) {
         when (PatchType.from(patch.type)) {
             PatchType.Update -> NativeLibrary.removeUpdate(patch.programId)
-            PatchType.DLC -> NativeLibrary.removeDLC(patch.programId)
+            PatchType.DLC -> NativeLibrary.removeDLC(patch.titleId)
             PatchType.Mod -> NativeLibrary.removeMod(patch.programId, patch.name)
             PatchType.Cheat -> return
         }

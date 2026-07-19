@@ -32,12 +32,14 @@ H264::~H264() = default;
 std::span<const u8> H264::ComposeFrame(const Host1x::NvdecCommon::NvdecRegisters& state,
                                        size_t* out_configuration_size, bool is_first_frame) {
     H264DecoderContext context;
-    host1x.GMMU().ReadBlock(state.picture_info_offset, &context, sizeof(H264DecoderContext));
+    host1x.GMMU().ReadBlock(state.picture_info_offset, &context, sizeof(H264DecoderContext),
+                            VideoCommon::CacheType::All, "NVDEC.H264.picture_info");
 
     const s64 frame_number = context.h264_parameter_set.frame_number.Value();
     if (!is_first_frame && frame_number != 0) {
         frame.resize_destructive(context.stream_len);
-        host1x.GMMU().ReadBlock(state.frame_bitstream_offset, frame.data(), frame.size());
+        host1x.GMMU().ReadBlock(state.frame_bitstream_offset, frame.data(), frame.size(),
+                                VideoCommon::CacheType::All, "NVDEC.H264.bitstream");
         *out_configuration_size = 0;
         return frame;
     }
@@ -159,7 +161,8 @@ std::span<const u8> H264::ComposeFrame(const Host1x::NvdecCommon::NvdecRegisters
 
     *out_configuration_size = encoded_header.size();
     host1x.GMMU().ReadBlock(state.frame_bitstream_offset, frame.data() + encoded_header.size(),
-                            context.stream_len);
+                            context.stream_len, VideoCommon::CacheType::All,
+                            "NVDEC.H264.bitstream");
 
     return frame;
 }

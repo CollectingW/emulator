@@ -877,7 +877,8 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
                                   .version = version_str,
                                   .type = PatchType::Update,
                                   .program_id = title_id,
-                                  .title_id = title_id};
+                                  .title_id = title_id,
+                                  .removable = false};
             out.push_back(update_patch);
         }
     }
@@ -888,7 +889,8 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
                               .version = "PACKED",
                               .type = PatchType::Update,
                               .program_id = title_id,
-                              .title_id = title_id};
+                              .title_id = title_id,
+                              .removable = false};
         out.push_back(update_patch);
     }
 
@@ -954,7 +956,7 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
         }
     }
 
-    // --- 4. NAND DLC ---
+    // --- 4. DLC ---
     // Emit one row per DLC so the Properties UI can toggle individual items.
     // Key format "DLC {:04d}" uses GetAOCID (title_id & 0x7FF), matching what
     // ListAddOnContent and CountAddOnContent check in disabled_addons.
@@ -978,12 +980,20 @@ std::vector<Patch> PatchManager::GetPatches(VirtualFile update_raw) const {
             const bool item_disabled =
                 global_dlc_disabled ||
                 std::find(disabled.begin(), disabled.end(), item_key) != disabled.end();
+            bool removable = false;
+            if (content_provider_union) {
+                const auto origin = content_provider_union->GetSlotForEntry(
+                    dlc.title_id, ContentRecordType::Data);
+                removable = origin && (*origin == ContentProviderUnionSlot::UserNAND ||
+                                       *origin == ContentProviderUnionSlot::SDMC);
+            }
             out.push_back({.enabled = !item_disabled,
                            .name = item_key,
                            .version = fmt::format("{}", aoc_id),
                            .type = PatchType::DLC,
                            .program_id = title_id,
-                           .title_id = dlc.title_id});
+                           .title_id = dlc.title_id,
+                           .removable = removable});
         }
     }
 

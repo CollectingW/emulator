@@ -196,7 +196,6 @@ add_executable(citron
     debugger/address_list.h
     debugger/disassembler_view.cpp
     debugger/disassembler_view.h
-    discord.h
     game_details_panel.cpp
     game_details_panel.h
     game_grid_delegate.cpp
@@ -299,10 +298,6 @@ add_executable(citron
     vk_device_info.h
     compatdb.cpp
     compatdb.h
-    setup_wizard.cpp
-    setup_wizard.h
-    setup_wizard_page.cpp
-    setup_wizard_page.h
     ui/game_view_base.cpp
     ui/game_view_base.h
     ui/game_grid_view.cpp
@@ -333,24 +328,6 @@ if (CITRON_CRASH_DUMPS)
         unordered_dense::unordered_dense
     )
     target_compile_definitions(citron PRIVATE CITRON_CRASH_DUMPS)
-endif()
-
-if (CITRON_USE_AUTO_UPDATER)
-    target_sources(citron PRIVATE
-        updater/updater_service.cpp
-        updater/updater_service.h
-        updater/updater_dialog.cpp
-        updater/updater_dialog.h
-        updater/updater_dialog.ui
-    )
-
-    target_compile_definitions(citron PRIVATE
-        # Ensure _WIN32 is defined for moc processing on Windows
-        $<$<BOOL:${WIN32}>:_WIN32>
-        CITRON_USE_AUTO_UPDATER
-    )
-
-    target_link_libraries(citron PRIVATE Qt6::Network)
 endif()
 
 # Mod Manager functionality for downloading patches
@@ -571,15 +548,6 @@ target_compile_definitions(citron PRIVATE
 
 if (CITRON_ENABLE_COMPATIBILITY_REPORTING)
     target_compile_definitions(citron PRIVATE -DCITRON_ENABLE_COMPATIBILITY_REPORTING)
-endif()
-
-if (USE_DISCORD_PRESENCE)
-    target_sources(citron PUBLIC
-        discord_impl.cpp
-        discord_impl.h
-    )
-    target_link_libraries(citron PRIVATE DiscordRPC::discord-rpc httplib::httplib Qt6::Network)
-    target_compile_definitions(citron PRIVATE -DUSE_DISCORD_PRESENCE)
 endif()
 
 if (ENABLE_WEB_SERVICE)

@@ -139,9 +139,14 @@ Status BufferQueueProducer::WaitForFreeSlotThenRelock(bool async, s32* found, St
             }
         }
 
-               // Free up any buffers that are in slots beyond the max buffer count
+        // Free up any buffers that are in slots beyond the max buffer count
         for (s32 s = max_buffer_count; s < BufferQueueDefs::NUM_BUFFER_SLOTS; ++s) {
-            ASSERT(slots[s].buffer_state == BufferState::Free);
+            ASSERT_MSG(slots[s].buffer_state == BufferState::Free,
+                       "slot={} state={} max_buffer_count={} override={} queue_size={} "
+                       "preallocated={}",
+                       s, slots[s].buffer_state, max_buffer_count,
+                       core->override_max_buffer_count, core->queue.size(),
+                       slots[s].is_preallocated);
             if (slots[s].graphic_buffer != nullptr && slots[s].buffer_state == BufferState::Free &&
                 !slots[s].is_preallocated) {
                 core->FreeBufferLocked(s);
@@ -201,7 +206,7 @@ Status BufferQueueProducer::WaitForFreeSlotThenRelock(bool async, s32* found, St
                // outrun the consumer. Wait here if it looks like we have too many buffers queued up.
         const bool too_many_buffers = core->queue.size() > static_cast<size_t>(max_buffer_count);
         if (too_many_buffers) {
-            LOG_ERROR(Service_Nvnflinger, "queue size is {}, waiting", core->queue.size());
+            LOG_DEBUG(Service_Nvnflinger, "queue size is {}, waiting", core->queue.size());
         }
 
                // If no buffer is found, or if the queue has too many buffers outstanding, wait for a

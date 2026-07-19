@@ -38,6 +38,7 @@ struct Patch {
     PatchType type;
     u64 program_id;
     u64 title_id;
+    bool removable{true};
 };
 
 struct CheatPatch {

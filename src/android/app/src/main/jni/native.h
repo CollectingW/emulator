@@ -28,7 +28,6 @@ public:
 
     const EmuWindow_Android& Window() const;
     EmuWindow_Android& Window();
-    ANativeWindow* NativeWindow() const;
     void SetNativeWindow(ANativeWindow* native_window);
     void SurfaceChanged();
 
@@ -38,6 +37,7 @@ public:
 
     bool IsRunning() const;
     bool IsPaused() const;
+    bool IsShuttingDown() const;
     bool IsNetworkInitialized() const;
     void PauseEmulation();
     void UnPauseEmulation();
@@ -73,6 +73,7 @@ private:
     // Window management
     std::unique_ptr<EmuWindow_Android> m_window;
     ANativeWindow* m_native_window{};
+    mutable std::mutex m_window_mutex;
 
     // Core emulation
     Core::System m_system;
@@ -83,6 +84,8 @@ private:
     Core::SystemResultStatus m_load_result{Core::SystemResultStatus::ErrorNotInitialized};
     std::atomic<bool> m_is_running = false;
     std::atomic<bool> m_is_paused = false;
+    std::atomic<bool> m_is_shutting_down = false;
+    bool m_session_active = false;
     bool m_network_initialized{};
     Common::Android::SoftwareKeyboard::AndroidKeyboard* m_software_keyboard{};
     std::unique_ptr<FileSys::ManualContentProvider> m_manual_provider;
@@ -93,6 +96,7 @@ private:
 
     // Synchronization
     std::condition_variable_any m_cv;
+    std::condition_variable m_session_cv;
     mutable std::mutex m_mutex;
 
     // Program index for next boot

@@ -62,9 +62,6 @@ class QtControllerSelectorDialog;
 class QtProfileSelectionDialog;
 class QtSoftwareKeyboardDialog;
 class QtNXWebEngineView;
-namespace Updater {
-class UpdaterDialog;
-}
 
 enum class StartGameType { Normal, Global };
 
@@ -80,9 +77,6 @@ struct InlineTextParameters;
 struct KeyboardInitializeParameters;
 struct ProfileSelectParameters;
 } // namespace Core::Frontend
-namespace DiscordRPC {
-class DiscordInterface;
-}
 namespace PlayTime {
 class PlayTimeManager;
 }
@@ -137,41 +131,6 @@ private:
     QTimer scroll_timer;
     constexpr static int MaxMultiplier = 8;
 };
-
-#if defined(__linux__) && defined(CITRON_USE_AUTO_UPDATER)
-#include "citron/updater/updater_service.h"
-class QPlainTextEdit;
-class QProgressBar;
-
-class AutoUpdateBootDialog : public QDialog {
-    Q_OBJECT
-public:
-    explicit AutoUpdateBootDialog(QWidget* parent = nullptr);
-    ~AutoUpdateBootDialog() override;
-
-    void Start();
-    bool WasUpdated() const;
-
-private slots:
-    void OnUpdateCheckCompleted(bool has_update, const Updater::UpdateInfo& update_info);
-    void OnUpdateDownloadProgress(int percentage, qint64 bytes_received, qint64 bytes_total);
-    void OnUpdateInstallProgress(int percentage, const QString& current_file);
-    void OnUpdateCompleted(Updater::UpdaterService::UpdateResult result, const QString& message);
-    void OnUpdateError(const QString& error_message);
-    void OnWatchdogTimeout();
-
-private:
-    void Log(const QString& text);
-    QString FormatBytes(qint64 bytes) const;
-
-    QPlainTextEdit* console_output;
-    QProgressBar* progress_bar;
-    Updater::UpdaterService* updater_service;
-    QTimer watchdog_timer;
-    bool was_updated = false;
-    bool is_aborting = false;
-};
-#endif
 
 class GMainWindow : public QMainWindow {
     Q_OBJECT
@@ -289,7 +248,6 @@ private:
                   StartGameType with_config = StartGameType::Normal);
     void BootGameFromList(const QString& filename, StartGameType with_config);
     void ShutdownGame();
-    void SetDiscordEnabled(bool state);
     void LoadAmiibo(const QString& filename);
     bool SelectAndSetCurrentUser(const Core::Frontend::ProfileSelectParameters& parameters);
     void StoreRecentFile(const QString& filename);
@@ -371,10 +329,7 @@ private slots:
     bool ExtractZipToDirectory(const std::filesystem::path& zip_path,
                                const std::filesystem::path& extract_path);
     void OnInstallDecryptionKeys();
-    void OnMenuOpenSetupWizard();
     void OnAbout();
-    void OnCheckForUpdates();
-    void CheckForUpdatesAutomatically();
     void OnToggleFilterBar();
     void OnToggleGridView();
     void OnToggleStatusBar();
@@ -469,7 +424,6 @@ private:
     std::unique_ptr<Core::System> system;
     std::shared_ptr<InputCommon::InputSubsystem> input_subsystem;
     std::unique_ptr<Ui::MainWindow> ui;
-    std::unique_ptr<DiscordRPC::DiscordInterface> discord_rpc;
     std::unique_ptr<PlayTime::PlayTimeManager> play_time_manager;
     MultiplayerState* multiplayer_state = nullptr;
     GRenderWindow *render_window;

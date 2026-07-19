@@ -17,6 +17,7 @@ public:
     void SaveAndroidControlPlayerValues(std::size_t player_index);
 
 protected:
+    bool MigrateLegacyVolumeBoost();
     void ReadAndroidPlayerValues(std::size_t player_index);
     void ReadAndroidControlValues();
     void ReadAndroidValues();

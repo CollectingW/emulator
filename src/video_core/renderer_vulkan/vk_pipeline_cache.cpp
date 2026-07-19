@@ -54,7 +54,8 @@ using VideoCommon::FileEnvironment;
 using VideoCommon::GenericEnvironment;
 using VideoCommon::GraphicsEnvironment;
 
-constexpr u32 CACHE_VERSION = 14;
+constexpr u32 TRANSFERABLE_CACHE_VERSION = 15;
+constexpr u32 VULKAN_PIPELINE_CACHE_VERSION = 14;
 constexpr std::array<char, 8> VULKAN_CACHE_MAGIC_NUMBER{'y', 'u', 'z', 'u', 'v', 'k', 'c', 'h'};
 
 template <typename Container>
@@ -462,7 +463,7 @@ PipelineCache::~PipelineCache() {
 
     if (use_vulkan_pipeline_cache && !vulkan_pipeline_cache_filename.empty()) {
         SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
-                                     CACHE_VERSION);
+                                     VULKAN_PIPELINE_CACHE_VERSION);
     }
 }
 
@@ -530,6 +531,10 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
     if (current_pipeline) {
         GraphicsPipeline* const next{current_pipeline->Next(graphics_key)};
         if (next) {
+            if (next->IsFailed()) {
+                current_pipeline = next;
+                return nullptr;
+            }
             current_pipeline = next;
             // Update last use frame
             graphics_pipeline_last_use[current_pipeline] = scheduler.CurrentTick();
@@ -583,7 +588,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     if (use_vulkan_pipeline_cache) {
         vulkan_pipeline_cache_filename = base_dir / "vulkan_pipelines.bin";
         vulkan_pipeline_cache =
-            LoadVulkanPipelineCache(vulkan_pipeline_cache_filename, CACHE_VERSION);
+            LoadVulkanPipelineCache(vulkan_pipeline_cache_filename, VULKAN_PIPELINE_CACHE_VERSION);
     }
 
     struct {
@@ -594,6 +599,8 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         std::unique_ptr<PipelineStatistics> statistics;
         size_t total_compute{};
         size_t total_graphics{};
+        size_t invalid{};
+        size_t feature_mismatch{};
     } state;
 
     if (device.IsKhrPipelineExecutablePropertiesEnabled()) {
@@ -602,6 +609,11 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     const auto load_compute{[&](std::ifstream& file, FileEnvironment env) {
         ComputePipelineCacheKey key;
         file.read(reinterpret_cast<char*>(&key), sizeof(key));
+
+        if (!env.HasValidEntryInstruction()) {
+            ++state.invalid;
+            return;
+        }
 
         workers.QueueWork([this, key, env_ = std::move(env), &state, &callback]() mutable {
             ShaderPools pools;
@@ -623,6 +635,11 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         GraphicsPipelineCacheKey key;
         file.read(reinterpret_cast<char*>(&key), sizeof(key));
 
+        if (!std::ranges::all_of(envs, &FileEnvironment::HasValidEntryInstruction)) {
+            ++state.invalid;
+            return;
+        }
+
         if ((key.state.extended_dynamic_state != 0) !=
                 dynamic_features.has_extended_dynamic_state ||
             (key.state.extended_dynamic_state_2 != 0) !=
@@ -639,7 +656,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
             // device capability AND per-pipeline runtime state. We only reject
             // the pipeline if it actively requires XFB but the host device
             // does not support it
-            LOG_WARNING(Render_Vulkan, "Skipping cached graphics pipeline: EDS feature mismatch");
+            ++state.feature_mismatch;
             return;
         }
         workers.QueueWork([this, key, envs_ = std::move(envs), &state, &callback]() mutable {
@@ -669,8 +686,19 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         ++state.total;
         ++state.total_graphics;
     }};
-    VideoCommon::LoadPipelines(stop_loading, pipeline_cache_filename, CACHE_VERSION, load_compute,
-                               load_graphics);
+    VideoCommon::LoadPipelines(stop_loading, pipeline_cache_filename, TRANSFERABLE_CACHE_VERSION,
+                               load_compute, load_graphics);
+
+    if (state.invalid != 0) {
+        LOG_WARNING(Render_Vulkan, "Skipped {} cached pipelines with invalid shader entry points",
+                    state.invalid);
+    }
+    if (state.feature_mismatch != 0) {
+        LOG_WARNING(Render_Vulkan,
+                    "Skipped {} cached graphics pipelines with incompatible dynamic-state "
+                    "features",
+                    state.feature_mismatch);
+    }
 
     LOG_INFO(Render_Vulkan, "Total Pipeline Count: {}", state.total);
 
@@ -693,7 +721,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
 
     if (use_vulkan_pipeline_cache) {
         SerializeVulkanPipelineCache(vulkan_pipeline_cache_filename, vulkan_pipeline_cache,
-                                     CACHE_VERSION);
+                                     VULKAN_PIPELINE_CACHE_VERSION);
     }
 
     if (state.statistics) {
@@ -704,20 +732,24 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
 GraphicsPipeline* PipelineCache::CurrentGraphicsPipelineSlowPath() {
     const auto [pair, is_new]{graphics_cache.try_emplace(graphics_key)};
     auto& pipeline{pair->second};
+    GraphicsPipeline* transition_source = current_pipeline;
     if (is_new) {
         pipeline = CreateGraphicsPipeline();
     }
     if (!pipeline) {
         return nullptr;
     }
-    if (current_pipeline) {
-        current_pipeline->AddTransition(pipeline.get());
+    if (transition_source && transition_source != pipeline.get()) {
+        transition_source->AddTransition(pipeline.get());
     }
     current_pipeline = pipeline.get();
     return BuiltPipeline(current_pipeline);
 }
 
 GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) const noexcept {
+    if (pipeline->IsFailed()) {
+        return nullptr;
+    }
     if (pipeline->IsBuilt()) {
         return pipeline;
     }
@@ -864,7 +896,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
                 env_ptrs.push_back(&envs[index]);
             }
         }
-        SerializePipeline(key, env_ptrs, pipeline_cache_filename, CACHE_VERSION);
+        SerializePipeline(key, env_ptrs, pipeline_cache_filename, TRANSFERABLE_CACHE_VERSION);
     });
     return pipeline;
 }
@@ -883,7 +915,7 @@ std::unique_ptr<ComputePipeline> PipelineCache::CreateComputePipeline(
     }
     serialization_thread.QueueWork([this, key, env_ = std::move(env)] {
         SerializePipeline(key, std::array<const GenericEnvironment*, 1>{&env_},
-                          pipeline_cache_filename, CACHE_VERSION);
+                          pipeline_cache_filename, TRANSFERABLE_CACHE_VERSION);
     });
     return pipeline;
 }

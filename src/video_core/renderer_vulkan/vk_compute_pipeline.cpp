@@ -187,7 +187,6 @@ void ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
                 cbufs[desc.cbuf_index].Address() + desc.cbuf_offset;
 
             const size_t byte_size = static_cast<size_t>(desc.count) << desc.size_shift;
-
             // Single scan: (addr, count, image_table_generation) match returns the
             // existing valid entry (hit); otherwise an invalid slot claimed for
             // filling below (miss).
@@ -206,7 +205,8 @@ void ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
 
             // Miss: read cbuf, resolve views, populate cache entry.
             bindless_scratch.resize(byte_size);
-            gpu_memory.ReadBlockUnsafe(cbuf_addr, bindless_scratch.data(), byte_size);
+            gpu_memory.ReadBlockUnsafe(cbuf_addr, bindless_scratch.data(), byte_size,
+                                       "Vulkan.ComputePipeline.bindless_cbuf");
             const size_t views_start = views.size();
             const size_t samplers_start = samplers.size();
             for (u32 index = 0; index < desc.count; ++index) {

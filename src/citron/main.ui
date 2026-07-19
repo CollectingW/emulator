@@ -152,8 +152,6 @@
     <property name="title">
      <string>&amp;Tools</string>
     </property>
-    <addaction name="action_Open_Setup_Wizard"/>
-    <addaction name="separator"/>
     <widget class="QMenu" name="menu_cabinet_applet">
      <property name="title">
       <string>&amp;Amiibo</string>
@@ -194,8 +192,6 @@
     <addaction name="action_Open_Support"/>
     <addaction name="separator"/>
     <addaction name="action_Open_Log_Folder"/>
-    <addaction name="separator"/>
-    <addaction name="action_Check_For_Updates"/>
     <addaction name="separator"/>
     <addaction name="action_About"/>
    </widget>
@@ -256,11 +252,6 @@
   <action name="action_Verify_installed_contents">
    <property name="text">
     <string>&amp;Verify Installed Contents</string>
-   </property>
-  </action>
-  <action name="action_Check_For_Updates">
-   <property name="text">
-    <string>Check for &amp;Updates...</string>
    </property>
   </action>
   <action name="action_About">
@@ -549,11 +540,6 @@
   <action name="action_Install_Keys">
    <property name="text">
     <string>Install Decryption Keys</string>
-   </property>
-  </action>
-  <action name="action_Open_Setup_Wizard">
-   <property name="text">
-    <string>Open &amp;Setup Wizard...</string>
    </property>
   </action>
  </widget>

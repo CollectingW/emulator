@@ -1140,12 +1140,12 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
 
         @Synchronized
         fun stop() {
-            if (state != State.STOPPED) {
+            if (state != State.STOPPED && state != State.STOPPING) {
                 Log.debug("[EmulationFragment] Stopping emulation.")
                 NativeLibrary.stopEmulation()
-                state = State.STOPPED
+                state = State.STOPPING
             } else {
-                Log.warning("[EmulationFragment] Stop called while already stopped.")
+                Log.warning("[EmulationFragment] Stop called while already stopped or stopping.")
             }
         }
 
@@ -1211,6 +1211,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
                 Log.warning("[EmulationFragment] clearSurface called, but surface already null.")
             } else {
                 surface = null
+                NativeLibrary.surfaceDestroyed()
                 Log.debug("[EmulationFragment] Surface destroyed.")
                 when (state) {
                     State.RUNNING -> {
@@ -1219,6 +1220,10 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
 
                     State.PAUSED -> Log.warning(
                         "[EmulationFragment] Surface cleared while emulation paused."
+                    )
+
+                    State.STOPPING -> Log.debug(
+                        "[EmulationFragment] Surface cleared while emulation stopping."
                     )
 
                     else -> Log.warning(
@@ -1254,7 +1259,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
         }
 
         private enum class State {
-            STOPPED, RUNNING, PAUSED
+            STOPPED, STOPPING, RUNNING, PAUSED
         }
     }
 

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <span>
 #include <vector>
 #include <boost/container/small_vector.hpp>
@@ -1752,7 +1753,13 @@ bool Image::BlitScaleHelper(bool scale_up) {
     } else {
         // TODO: Use helper blits where applicable
         flags &= ~ImageFlagBits::Rescaled;
-        LOG_ERROR(Render_Vulkan, "Device does not support scaling format {}", info.format);
+        static std::atomic<u64> unsupported_scale_count{0};
+        const u64 count = unsupported_scale_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (count <= 8 || (count % 1024) == 0) {
+            LOG_WARNING(Render_Vulkan,
+                        "Unsupported scaling format {} with aspect mask 0x{:X} [total: {}]",
+                        info.format, static_cast<u32>(aspect_mask), count);
+        }
         return false;
     }
     return true;

@@ -35,12 +35,8 @@ private:
     void ResetMetadata();
     void UpdateEnabledControls();
 
-    void MigrateBackups(const QString& old_path, const QString& new_path);
     void MigrateSavesToGlobal(const QString& new_global_path);
     bool CopyDirRecursive(const QString& src, const QString& dest, QProgressDialog& progress, qint64& copied, qint64 total);
 
     std::unique_ptr<Ui::ConfigureFilesystem> ui;
-
-    bool m_old_custom_backup_enabled{};
-    QString m_old_backup_path;
 };

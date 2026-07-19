@@ -93,7 +93,8 @@ void KeplerCompute::CallMultiMethod(u32 method, const u32* base_start, u32 amoun
 void KeplerCompute::ProcessLaunch() {
     const GPUVAddr launch_desc_loc = regs.launch_desc_loc.Address();
     memory_manager.ReadBlockUnsafe(launch_desc_loc, &launch_description,
-                                   LaunchParams::NUM_LAUNCH_PARAMETERS * sizeof(u32));
+                                   LaunchParams::NUM_LAUNCH_PARAMETERS * sizeof(u32),
+                                   "KeplerCompute.launch_description");
     rasterizer->DispatchCompute();
 }
 
@@ -101,7 +102,8 @@ Texture::TICEntry KeplerCompute::GetTICEntry(u32 tic_index) const {
     const GPUVAddr tic_address_gpu{regs.tic.Address() + tic_index * sizeof(Texture::TICEntry)};
 
     Texture::TICEntry tic_entry;
-    memory_manager.ReadBlockUnsafe(tic_address_gpu, &tic_entry, sizeof(Texture::TICEntry));
+    memory_manager.ReadBlockUnsafe(tic_address_gpu, &tic_entry, sizeof(Texture::TICEntry),
+                                   "KeplerCompute.TIC");
     return tic_entry;
 }
 
@@ -109,7 +111,8 @@ Texture::TSCEntry KeplerCompute::GetTSCEntry(u32 tsc_index) const {
     const GPUVAddr tsc_address_gpu{regs.tsc.Address() + tsc_index * sizeof(Texture::TSCEntry)};
 
     Texture::TSCEntry tsc_entry;
-    memory_manager.ReadBlockUnsafe(tsc_address_gpu, &tsc_entry, sizeof(Texture::TSCEntry));
+    memory_manager.ReadBlockUnsafe(tsc_address_gpu, &tsc_entry, sizeof(Texture::TSCEntry),
+                                   "KeplerCompute.TSC");
     return tsc_entry;
 }
 

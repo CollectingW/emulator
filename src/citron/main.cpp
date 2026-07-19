@@ -46,7 +46,6 @@
 #include "applets/qt_web_browser.h"
 #include "citron/custom_metadata.h"
 #include "citron/multiplayer/state.h"
-#include "citron/setup_wizard.h"
 #include "citron/util/controller_navigation.h"
 #include "common/hex_util.h"
 #include "common/nvidia_flags.h"
@@ -85,7 +84,6 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include <fmt/ostream.h>
 
 #define QT_NO_OPENGL
-#include <QCheckBox>
 #include <QClipboard>
 #include <QDesktopServices>
 #include <QDir>
@@ -94,16 +92,13 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include <QGuiApplication>
 #include <QInputDialog>
 #include <QMessageBox>
-#include <QProgressBar>
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QScreen>
-#include <QPlainTextEdit>
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QTimer>
 #include <QDateTime>
-#include <QProcess>
 #include <QShortcut>
 #include <QStandardPaths>
 #include <QStatusBar>
@@ -152,7 +147,6 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "citron/debugger/controller.h"
 #include "citron/debugger/memory_tools.h"
 #include "citron/debugger/wait_tree.h"
-#include "citron/discord.h"
 #include "citron/game_list.h"
 #include "citron/game_list_p.h"
 #include "citron/hotkeys.h"
@@ -197,10 +191,6 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/shader_notify.h"
 
-#ifdef CITRON_USE_AUTO_UPDATER
-#include "citron/updater/updater_dialog.h"
-#include "citron/updater/updater_service.h"
-#endif
 #include "citron/util/clickable_label.h"
 #include "citron/util/multiplayer_room_overlay.h"
 #include "citron/util/performance_overlay.h"
@@ -212,10 +202,6 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #endif
 
 using namespace Common::Literals;
-
-#ifdef USE_DISCORD_PRESENCE
-#include "citron/discord_impl.h"
-#endif
 
 #ifdef QT_STATICPLUGIN
 Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin);
@@ -376,9 +362,6 @@ GMainWindow::GMainWindow(std::unique_ptr<QtConfig> config_, bool has_broken_vulk
 
     play_time_manager = std::make_unique<PlayTime::PlayTimeManager>(system->GetProfileManager());
 
-    SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
-    discord_rpc->Update();
-
     system->GetRoomNetwork().Init();
 
     RegisterMetaTypes();
@@ -463,11 +446,6 @@ GMainWindow::GMainWindow(std::unique_ptr<QtConfig> config_, bool has_broken_vulk
     game_list->LoadCompatibilityList();
     game_list->PopulateAsync(UISettings::values.game_dirs);
 
-    // Check for updates automatically after a short delay (non-blocking)
-    if (UISettings::values.check_for_updates_on_start) {
-        QTimer::singleShot(3000, this, &GMainWindow::CheckForUpdatesAutomatically);
-    }
-
     // make sure menubar has the arrow cursor instead of inheriting from this
     ui->menubar->setCursor(QCursor());
 
@@ -481,31 +459,6 @@ GMainWindow::GMainWindow(std::unique_ptr<QtConfig> config_, bool has_broken_vulk
 
     // Process events to ensure main window is fully rendered
     QApplication::processEvents();
-
-    // Check for first-time setup
-    if (UISettings::values.first_start.GetValue()) {
-        QTimer::singleShot(500, this, [this]() {
-            if (this->findChild<SetupWizard*>()) {
-                return;
-            }
-
-            auto result = QMessageBox::question(
-                this, tr("Setup Wizard"),
-                tr("A Setup Wizard is available to help you configure your keys, firmware, and "
-                   "game library. Would you like to use it now?"),
-                QMessageBox::Yes | QMessageBox::No);
-
-            if (result == QMessageBox::Yes) {
-                auto* setup_wizard = new SetupWizard(*system, this, this);
-                setup_wizard->setAttribute(Qt::WA_DeleteOnClose);
-                setup_wizard->show();
-            } else {
-                UISettings::values.first_start.SetValue(false);
-                OnSaveConfig(); // Persist the refusal
-            }
-        });
-    }
-
 
     if (has_broken_vulkan) {
         UISettings::values.has_broken_vulkan = true;
@@ -1948,8 +1901,6 @@ void GMainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Verify_installed_contents, &GMainWindow::OnVerifyInstalledContents);
     connect_menu(ui->action_Install_Firmware, &GMainWindow::OnInstallFirmware);
     connect_menu(ui->action_Install_Keys, &GMainWindow::OnInstallDecryptionKeys);
-    connect_menu(ui->action_Open_Setup_Wizard, &GMainWindow::OnMenuOpenSetupWizard);
-    connect_menu(ui->action_Check_For_Updates, &GMainWindow::OnCheckForUpdates);
     connect_menu(ui->action_About, &GMainWindow::OnAbout);
 
     connect(ui->actionControllerOverlay, &QAction::triggered, this,
@@ -2480,7 +2431,6 @@ bool GMainWindow::OnShutdownBegin() {
     }
 
     system->SetShuttingDown(true);
-    discord_rpc->Pause();
 
     RequestGameExit();
     emu_thread->disconnect();
@@ -2557,8 +2507,6 @@ void GMainWindow::OnEmulationStopped() {
     game_list->PopulateAsync(UISettings::values.game_dirs, true);
     game_list->setEnabled(true);
     game_list->setFocus();
-
-    discord_rpc->Update();
 
 #ifdef __unix__
     Common::Linux::StopGamemode();
@@ -3670,9 +3618,10 @@ void GMainWindow::IncrementInstallProgress() {
 
 void GMainWindow::OnMenuInstallToNAND() {
     const QString file_filter =
-        tr("Installable Switch File (*.nca *.nsp *.xci);;Nintendo Content Archive "
+        tr("Installable Switch File (*.nca *.nsp *.xci *.dnsp *.dxci);;Nintendo Content Archive "
            "(*.nca);;Nintendo Submission Package (*.nsp);;NX Cartridge "
-           "Image (*.xci)");
+           "Image (*.xci);;Decrypted Nintendo Submission Package (*.dnsp);;Decrypted NX "
+           "Cartridge Image (*.dxci)");
 
     QStringList filenames = QFileDialog::getOpenFileNames(
         this, tr("Install Files"), QString::fromStdString(UISettings::values.roms_path),
@@ -3800,7 +3749,7 @@ void GMainWindow::OnMenuInstallToNAND() {
 }
 
 void GMainWindow::OnMenuTrimXCI() {
-    const QString file_filter = tr("NX Cartridge Image (*.xci)");
+    const QString file_filter = tr("NX Cartridge Image (*.xci *.dxci)");
 
     const QString filename = QFileDialog::getOpenFileName(
         this, tr("Select XCI File to Trim"), QString::fromStdString(UISettings::values.roms_path),
@@ -3878,7 +3827,8 @@ void GMainWindow::OnMenuTrimXCI() {
         const QString suggested_name = QDir(file_info.path()).filePath(new_filename);
 
         const QString output_filename = QFileDialog::getSaveFileName(
-            this, tr("Save Trimmed XCI File As"), suggested_name, tr("NX Cartridge Image (*.xci)"));
+            this, tr("Save Trimmed XCI File As"), suggested_name,
+            tr("NX Cartridge Image (*.xci *.dxci)"));
 
         if (output_filename.isEmpty()) {
             return;
@@ -4093,8 +4043,6 @@ void GMainWindow::OnStartGame() {
 
     play_time_manager->SetProgramId(system->GetApplicationProcessProgramID());
     play_time_manager->Start();
-
-    discord_rpc->Update();
 
 #ifdef __unix__
     Common::Linux::StartGamemode();
@@ -4434,7 +4382,6 @@ void GMainWindow::ResetWindowSize1080() {
 void GMainWindow::OnConfigure() {
     m_is_configuring = true;
     const auto old_theme = UISettings::values.theme;
-    const bool old_discord_presence = UISettings::values.enable_discord_presence.GetValue();
     const auto old_language_index = Settings::values.language_index.GetValue();
 #ifdef __unix__
     const bool old_gamemode = Settings::values.enable_gamemode.GetValue();
@@ -4498,9 +4445,6 @@ void GMainWindow::OnConfigure() {
     // This is for other configuration sources
     if (UISettings::values.theme != old_theme && !m_is_configuring) {
         UpdateUITheme();
-    }
-    if (UISettings::values.enable_discord_presence.GetValue() != old_discord_presence) {
-        SetDiscordEnabled(UISettings::values.enable_discord_presence.GetValue());
     }
 #ifdef __unix__
     if (Settings::values.enable_gamemode.GetValue() != old_gamemode) {
@@ -4896,7 +4840,7 @@ bool GMainWindow::ExtractZipToDirectoryPublic(const std::filesystem::path& zip_p
 bool GMainWindow::ExtractZipToDirectory(const std::filesystem::path& zip_path,
                                         const std::filesystem::path& extract_path) {
 #ifdef CITRON_ENABLE_LIBARCHIVE
-    // Use libarchive if available (similar to updater code)
+    // Use libarchive if available
     struct archive* a = archive_read_new();
     struct archive* ext = archive_write_disk_new();
     struct archive_entry* entry;
@@ -5306,17 +5250,6 @@ void GMainWindow::OnInstallFirmware() {
 
     progress.close();
     OnCheckFirmwareDecryption();
-}
-
-void GMainWindow::OnMenuOpenSetupWizard() {
-    if (this->findChild<SetupWizard*>()) {
-        this->findChild<SetupWizard*>()->activateWindow();
-        return;
-    }
-
-    auto* setup_wizard = new SetupWizard(*system, this, this);
-    setup_wizard->setAttribute(Qt::WA_DeleteOnClose);
-    setup_wizard->show();
 }
 
 void GMainWindow::OnInstallDecryptionKeys() {
@@ -6617,19 +6550,6 @@ void GMainWindow::OnLanguageChanged(const QString& locale) {
     UpdateWindowTitle();
 }
 
-void GMainWindow::SetDiscordEnabled([[maybe_unused]] bool state) {
-#ifdef USE_DISCORD_PRESENCE
-    if (state) {
-        discord_rpc = std::make_unique<DiscordRPC::DiscordImpl>(*system, *play_time_manager);
-    } else {
-        discord_rpc = std::make_unique<DiscordRPC::NullImpl>();
-    }
-#else
-    discord_rpc = std::make_unique<DiscordRPC::NullImpl>();
-#endif
-    discord_rpc->Update();
-}
-
 #ifdef __unix__
 void GMainWindow::SetGamemodeEnabled(bool state) {
     if (emulation_running) {
@@ -6802,165 +6722,6 @@ static void SetHighDPIAttributes() {
 #undef main
 #endif
 
-#if defined(__linux__) && defined(CITRON_USE_AUTO_UPDATER)
-AutoUpdateBootDialog::AutoUpdateBootDialog(QWidget* parent) : QDialog(parent) {
-    setWindowTitle(tr("Citron Pre-Init Auto-Updater"));
-    setFixedSize(650, 450);
-    setWindowFlags(Qt::Dialog | Qt::CustomizeWindowHint | Qt::WindowTitleHint);
-    setModal(true);
-
-    auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(15, 15, 15, 15);
-    layout->setSpacing(10);
-
-    auto* title_label = new QLabel(tr("Checking for Citron AppImage updates..."), this);
-    title_label->setStyleSheet(QStringLiteral("font-weight: bold; font-size: 14px; color: #ffffff;"));
-    layout->addWidget(title_label);
-
-    console_output = new QPlainTextEdit(this);
-    console_output->setReadOnly(true);
-    console_output->setStyleSheet(QStringLiteral(
-        "QPlainTextEdit { "
-        "background-color: #1a1b1e; "
-        "color: #00ff66; "
-        "font-family: 'monospace', 'Courier New', monospace; "
-        "font-size: 12px; "
-        "border: 1px solid #333333; "
-        "border-radius: 6px; "
-        "padding: 8px; "
-        "}"
-    ));
-    layout->addWidget(console_output);
-
-    progress_bar = new QProgressBar(this);
-    progress_bar->setRange(0, 100);
-    progress_bar->setValue(0);
-    progress_bar->setStyleSheet(QStringLiteral(
-        "QProgressBar { border: 1px solid #333333; border-radius: 4px; background: #242528; text-align: center; color: #ffffff; font-weight: bold; }"
-        "QProgressBar::chunk { background-color: #059669; border-radius: 3px; }"
-    ));
-    layout->addWidget(progress_bar);
-
-    setStyleSheet(QStringLiteral("QDialog { background-color: #242528; }"));
-
-    Log(tr("Initializing UpdaterService..."));
-    updater_service = new Updater::UpdaterService(this);
-
-    connect(updater_service, &Updater::UpdaterService::UpdateCheckCompleted, this, &AutoUpdateBootDialog::OnUpdateCheckCompleted);
-    connect(updater_service, &Updater::UpdaterService::UpdateDownloadProgress, this, &AutoUpdateBootDialog::OnUpdateDownloadProgress);
-    connect(updater_service, &Updater::UpdaterService::UpdateInstallProgress, this, &AutoUpdateBootDialog::OnUpdateInstallProgress);
-    connect(updater_service, &Updater::UpdaterService::UpdateCompleted, this, &AutoUpdateBootDialog::OnUpdateCompleted);
-    connect(updater_service, &Updater::UpdaterService::UpdateError, this, &AutoUpdateBootDialog::OnUpdateError);
-
-    watchdog_timer.setSingleShot(true);
-    connect(&watchdog_timer, &QTimer::timeout, this, &AutoUpdateBootDialog::OnWatchdogTimeout);
-}
-
-AutoUpdateBootDialog::~AutoUpdateBootDialog() = default;
-
-void AutoUpdateBootDialog::Start() {
-    if (updater_service->IsPgoBuild()) {
-        Log(tr("PGO build detected. Auto updater is disabled at boot."));
-        accept();
-        return;
-    }
-    Log(tr("Checking for updates..."));
-    watchdog_timer.start(2500); // 2.5 seconds max for update check! E.g. aggressive fail-fast!
-    updater_service->CheckForUpdates();
-}
-
-bool AutoUpdateBootDialog::WasUpdated() const {
-    return was_updated;
-}
-
-void AutoUpdateBootDialog::OnUpdateCheckCompleted(bool has_update, const Updater::UpdateInfo& update_info) {
-    watchdog_timer.stop();
-    if (is_aborting) return;
-
-    if (!has_update) {
-        Log(tr("AppImage is already up to date. E.g. no update required."));
-        accept();
-        return;
-    }
-
-    Log(tr("New version available: %1").arg(QString::fromStdString(update_info.version)));
-    if (!updater_service->CheckPgoWarning(this)) {
-        Log(tr("Update cancelled by user at PGO warning."));
-        accept();
-        return;
-    }
-
-    show(); // Only show the window if there is an update to download!
-
-    if (update_info.download_options.empty()) {
-        Log(tr("Error: No download options found."));
-        QTimer::singleShot(1000, this, &QDialog::accept);
-        return;
-    }
-
-    std::string download_url = update_info.download_options[0].url;
-    Log(tr("Downloading update from: %1").arg(QString::fromStdString(download_url)));
-    updater_service->DownloadAndInstallUpdate(download_url);
-}
-
-void AutoUpdateBootDialog::OnUpdateDownloadProgress(int percentage, qint64 bytes_received, qint64 bytes_total) {
-    progress_bar->setValue(percentage);
-    QString progress_text = tr("Downloading: %1% (%2 / %3)")
-        .arg(percentage)
-        .arg(FormatBytes(bytes_received))
-        .arg(FormatBytes(bytes_total));
-    progress_bar->setFormat(progress_text);
-}
-
-void AutoUpdateBootDialog::OnUpdateInstallProgress(int percentage, const QString& current_file) {
-    progress_bar->setValue(percentage);
-    progress_bar->setFormat(tr("Installing: %1%").arg(percentage));
-    Log(current_file);
-}
-
-void AutoUpdateBootDialog::OnUpdateCompleted(Updater::UpdaterService::UpdateResult result, const QString& message) {
-    if (result == Updater::UpdaterService::UpdateResult::Success) {
-        Log(tr("Update successful! Relaunching Citron AppImage..."));
-        was_updated = true;
-        QTimer::singleShot(3000, this, &QDialog::accept);
-    } else {
-        Log(message);
-        Log(tr("Update finished with status: %1").arg(static_cast<int>(result)));
-        QTimer::singleShot(2000, this, &QDialog::accept);
-    }
-}
-
-void AutoUpdateBootDialog::OnUpdateError(const QString& error_message) {
-    watchdog_timer.stop();
-    if (is_aborting) return;
-    Log(tr("Update error: %1").arg(error_message));
-    QTimer::singleShot(2000, this, &QDialog::accept);
-}
-
-void AutoUpdateBootDialog::OnWatchdogTimeout() {
-    is_aborting = true;
-    Log(tr("Update check timed out. Proceeding to boot Citron..."));
-    updater_service->AbortCheck();
-    accept();
-}
-
-void AutoUpdateBootDialog::Log(const QString& text) {
-    console_output->appendPlainText(QStringLiteral("[%1] %2")
-        .arg(QDateTime::currentDateTime().toString(QStringLiteral("hh:mm:ss")), text));
-}
-
-QString AutoUpdateBootDialog::FormatBytes(qint64 bytes) const {
-    const QStringList units = {QStringLiteral("B"), QStringLiteral("KB"), QStringLiteral("MB"), QStringLiteral("GB")};
-    double size = bytes;
-    int unit = 0;
-    while (size >= 1024.0 && unit < units.size() - 1) {
-        size /= 1024.0;
-        unit++;
-    }
-    return QStringLiteral("%1 %2").arg(QString::number(size, 'f', unit == 0 ? 0 : 1), units[unit]);
-}
-#endif
-
 int main(int argc, char* argv[]) {
     // 1. Detect Gamescope/Steam Deck hardware
     const bool is_gamescope = UISettings::IsGamescope();
@@ -7066,49 +6827,6 @@ int main(int argc, char* argv[]) {
     }
 #endif
 
-#ifdef CITRON_USE_AUTO_UPDATER
-    std::filesystem::path app_dir =
-        std::filesystem::path(QCoreApplication::applicationDirPath().toStdString());
-
-#ifdef _WIN32
-    // On Windows, updates are applied by the helper script after the app exits.
-    std::filesystem::path staging_path = app_dir / "update_staging";
-    if (std::filesystem::exists(staging_path)) {
-        try {
-            std::filesystem::remove_all(staging_path);
-        } catch (...) {
-        }
-    }
-#else
-    if (Updater::UpdaterService::HasStagedUpdate(app_dir)) {
-        if (Updater::UpdaterService::ApplyStagedUpdate(app_dir)) {
-            QMessageBox::information(nullptr, QObject::tr("Update Applied"),
-                                     QObject::tr("Citron has been updated successfully!"));
-        }
-    }
-#endif
-
-#if defined(__linux__)
-    if (is_appimage && UISettings::values.auto_update_before_init.GetValue()) {
-        AutoUpdateBootDialog boot_dialog;
-        boot_dialog.Start();
-
-        QEventLoop loop;
-        QObject::connect(&boot_dialog, &QDialog::finished, &loop, &QEventLoop::quit);
-        loop.exec();
-
-        if (boot_dialog.WasUpdated()) {
-            // Relaunch the AppImage and exit immediately!
-            QString program = QString::fromUtf8(qgetenv("APPIMAGE"));
-            QStringList arguments = QApplication::arguments();
-            arguments.removeFirst();
-            QProcess::startDetached(program, arguments);
-            return 0;
-        }
-    }
-#endif
-#endif
-
     setlocale(LC_ALL, "C");
 
     GMainWindow main_window{std::move(config), has_broken_vulkan};
@@ -7132,75 +6850,6 @@ int main(int argc, char* argv[]) {
                      &GMainWindow::OnAppFocusStateChanged);
 
     return app.exec();
-}
-
-void GMainWindow::OnCheckForUpdates() {
-#ifdef CITRON_USE_AUTO_UPDATER
-    auto* updater_dialog = new Updater::UpdaterDialog(this);
-    updater_dialog->setAttribute(Qt::WA_DeleteOnClose);
-    updater_dialog->show();
-    updater_dialog->CheckForUpdates();
-#else
-    QMessageBox::information(this, tr("Updates"),
-                             tr("The automatic updater is not enabled in this build."));
-#endif
-}
-
-void GMainWindow::CheckForUpdatesAutomatically() {
-#ifdef CITRON_USE_AUTO_UPDATER
-    // Check if automatic updates are enabled in general settings
-    if (!Settings::values.enable_auto_update_check.GetValue()) {
-        return;
-    }
-
-    LOG_INFO(Frontend, "Checking for updates automatically...");
-
-    auto* updater_service = new Updater::UpdaterService(this);
-
-    connect(updater_service, &Updater::UpdaterService::UpdateCheckCompleted, this,
-            [this, updater_service](bool has_update, const Updater::UpdateInfo& update_info) {
-                if (has_update) {
-                    // Create an advanced message box
-                    QMessageBox msg_box(this);
-                    msg_box.setWindowTitle(tr("Update Available"));
-                    msg_box.setText(tr("A new version of Citron is available: %1")
-                                        .arg(QString::fromStdString(update_info.version)));
-                    msg_box.setInformativeText(
-                        tr("Click Help → Check for Updates to download it. You can also choose "
-                           "whether you get notified of Stable or Nightly releases. Head over to "
-                           "Emulation -> Configure & go to the UI Tab and choose your selection "
-                           "within the Update Channel."));
-                    msg_box.setIcon(QMessageBox::Information);
-                    msg_box.setStandardButtons(QMessageBox::Ok);
-
-                    // Create and add the checkbox
-                    QCheckBox* check_box = new QCheckBox(tr("Don't check for updates on startup"));
-                    msg_box.setCheckBox(check_box);
-
-                    msg_box.exec();
-
-                    // After the dialog closes, check if the box was ticked
-                    if (msg_box.checkBox()->isChecked()) {
-                        UISettings::values.check_for_updates_on_start = false;
-                        // Save the setting immediately
-                        this->config->SaveAllValues();
-                    }
-                }
-                updater_service->deleteLater();
-            });
-
-    connect(
-        updater_service, &Updater::UpdaterService::UpdateCompleted, this,
-        [updater_service](Updater::UpdaterService::UpdateResult result, const QString& message) {
-            if (result == Updater::UpdaterService::UpdateResult::NetworkError ||
-                result == Updater::UpdaterService::UpdateResult::Failed) {
-                LOG_WARNING(Frontend, "Automatic update check failed: {}", message.toStdString());
-            }
-            updater_service->deleteLater();
-        });
-
-    updater_service->CheckForUpdates();
-#endif
 }
 
 void GMainWindow::OnToggleGridView() {

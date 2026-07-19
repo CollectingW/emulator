@@ -35,6 +35,7 @@
     <string name="search_and_filter_games">Search and filter games</string>
     <string name="switch_to_list_view">Switch to list view</string>
     <string name="switch_to_grid_view">Switch to grid view</string>
+    <string name="switch_to_compact_grid_view">Switch to compact grid view</string>
     <string name="select_games_folder">Select games folder</string>
     <string name="manage_game_folders">Manage game folders</string>
     <string name="select_games_folder_description">Allows citron to populate the games list</string>

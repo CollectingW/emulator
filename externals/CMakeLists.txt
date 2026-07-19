@@ -131,25 +131,6 @@ if (ENABLE_CUBEB AND NOT TARGET cubeb::cubeb)
     endif()
 endif()
 
-# DiscordRPC
-if (USE_DISCORD_PRESENCE AND NOT TARGET DiscordRPC::discord-rpc)
-    set(BUILD_EXAMPLES OFF)
-    # Help discord-rpc find RapidJSON if it's installed in the system
-    if (NOT RAPIDJSON AND NOT CITRON_USE_CPM)
-        find_path(RAPIDJSON_INCLUDE_DIR NAMES rapidjson/document.h)
-        if (RAPIDJSON_INCLUDE_DIR)
-            get_filename_component(RAPIDJSON_BASE_DIR "${RAPIDJSON_INCLUDE_DIR}" DIRECTORY)
-            set(RAPIDJSON "${RAPIDJSON_BASE_DIR}" CACHE PATH "Path to RapidJSON")
-        endif()
-    endif()
-    if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/discord-rpc/CMakeLists.txt")
-        add_subdirectory(discord-rpc)
-        target_include_directories(discord-rpc INTERFACE ./discord-rpc/include)
-        add_library(DiscordRPC::discord-rpc ALIAS discord-rpc)
-    endif()
-endif()
-
-
 # httplib
 if (ENABLE_WEB_SERVICE AND NOT TARGET httplib::httplib)
     set(HTTPLIB_REQUIRE_OPENSSL ON)

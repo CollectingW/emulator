@@ -17,7 +17,6 @@
 #include "citron/uisettings.h"
 #include "common/settings.h"
 #include "core/core.h"
-#include <QSettings>
 #include "ui_configure_general.h"
 
 ConfigureGeneral::ConfigureGeneral(Core::System& system_,
@@ -37,15 +36,6 @@ ConfigureGeneral::ConfigureGeneral(Core::System& system_,
         ui->button_reset_defaults->setVisible(false);
     }
 
-    ui->check_for_updates_checkbox->setChecked(
-        UISettings::values.check_for_updates_on_start.GetValue());
-    ui->auto_update_before_init_checkbox->setChecked(
-        UISettings::values.auto_update_before_init.GetValue());
-
-    ui->update_channel_combo->addItem(tr("Stable"), QStringLiteral("Stable"));
-    ui->update_channel_combo->addItem(tr("Nightly"), QStringLiteral("Nightly"));
-    ui->update_channel_combo->setCurrentIndex(1); // Default to Nightly (index 1)
-
     connect(ui->button_add_external_content, &QPushButton::clicked, this,
             &ConfigureGeneral::AddExternalContentDir);
     connect(ui->button_remove_external_content, &QPushButton::clicked, this,
@@ -62,17 +52,6 @@ ConfigureGeneral::~ConfigureGeneral() = default;
 
 void ConfigureGeneral::SetConfiguration() {
     RefreshExternalContentList();
-
-    QSettings settings;
-    settings.beginGroup(QStringLiteral("updater"));
-    QString channel = settings.value(QStringLiteral("channel"), QStringLiteral("Nightly")).toString();
-    settings.endGroup();
-
-    int index = ui->update_channel_combo->findData(channel);
-    if (index == -1) {
-        index = 1; // Default to Nightly if not found or empty
-    }
-    ui->update_channel_combo->setCurrentIndex(index);
 }
 
 void ConfigureGeneral::Setup(const ConfigurationShared::Builder& builder) {
@@ -171,17 +150,6 @@ void ConfigureGeneral::ResetDefaults() {
 
 void ConfigureGeneral::ApplyConfiguration() {
 
-    UISettings::values.check_for_updates_on_start.SetValue(
-        ui->check_for_updates_checkbox->isChecked());
-    UISettings::values.auto_update_before_init.SetValue(
-        ui->auto_update_before_init_checkbox->isChecked());
-
-    QSettings settings;
-    settings.beginGroup(QStringLiteral("updater"));
-    settings.setValue(QStringLiteral("channel"), ui->update_channel_combo->currentData().toString());
-    settings.endGroup();
-    settings.sync();
-
     std::vector<std::string> new_external_dirs;
     for (int i = 0; i < ui->external_content_list->count(); ++i) {
         new_external_dirs.push_back(ui->external_content_list->item(i)->text().toStdString());
@@ -231,9 +199,4 @@ void ConfigureGeneral::changeEvent(QEvent* event) {
 
 void ConfigureGeneral::RetranslateUI() {
     ui->retranslateUi(this);
-
-    const int channel_index = ui->update_channel_combo->currentIndex();
-    ui->update_channel_combo->setItemText(0, tr("Stable"));
-    ui->update_channel_combo->setItemText(1, tr("Nightly"));
-    ui->update_channel_combo->setCurrentIndex(channel_index);
 }

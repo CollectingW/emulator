@@ -5,12 +5,16 @@
 #include <input_common/main.h>
 #include "android_config.h"
 #include "android_settings.h"
+#include "common/settings.h"
 #include "common/settings_setting.h"
 
 AndroidConfig::AndroidConfig(const std::string& config_name, ConfigType config_type)
     : Config(config_type) {
     Initialize(config_name);
     if (config_type != ConfigType::InputProfile) {
+        if (MigrateLegacyVolumeBoost()) {
+            SaveValues();
+        }
         ReadAndroidValues();
         SaveAndroidValues();
     }
@@ -18,6 +22,9 @@ AndroidConfig::AndroidConfig(const std::string& config_name, ConfigType config_t
 
 void AndroidConfig::ReloadAllValues() {
     Reload();
+    if (MigrateLegacyVolumeBoost()) {
+        SaveValues();
+    }
     ReadAndroidValues();
     SaveAndroidValues();
 }
@@ -25,6 +32,22 @@ void AndroidConfig::ReloadAllValues() {
 void AndroidConfig::SaveAllValues() {
     SaveValues();
     SaveAndroidValues();
+}
+
+bool AndroidConfig::MigrateLegacyVolumeBoost() {
+    auto& volume = Settings::values.volume;
+    const auto legacy_volume = volume.GetValue();
+    if (legacy_volume <= 100) {
+        return false;
+    }
+
+    auto& volume_boost = Settings::values.volume_boost;
+    volume_boost.SetGlobal(volume.UsingGlobal());
+    if (volume_boost.GetValue() == volume_boost.GetDefault()) {
+        volume_boost.SetValue(legacy_volume);
+    }
+    volume.SetValue(100);
+    return true;
 }
 
 void AndroidConfig::ReadAndroidValues() {

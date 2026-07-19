@@ -191,6 +191,16 @@ struct Values {
                                        Specialization::Scalar | Specialization::Percentage,
                                        true,
                                        true};
+    SwitchableSetting<u8, true> volume_boost{
+        linkage,
+        100,
+        100,
+        200,
+        "volume_boost",
+        Category::Audio,
+        Specialization::Scalar | Specialization::Percentage,
+        true,
+        true};
     Setting<bool, false> audio_muted{
         linkage, false, "audio_muted", Category::Audio, Specialization::Default, true, true};
     Setting<bool, false> dump_audio_commands{
@@ -795,10 +805,6 @@ struct Values {
     Setting<std::string> citron_username{linkage, std::string(), "citron_username",
                                          Category::WebService};
     Setting<std::string> citron_token{linkage, std::string(), "citron_token", Category::WebService};
-
-    // Updater
-    Setting<bool> enable_auto_update_check{linkage, true, "enable_auto_update_check",
-                                           Category::WebService};
 
     // Add-Ons
     std::map<u64, std::vector<std::string>> disabled_addons;

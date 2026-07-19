@@ -81,9 +81,11 @@ s32 BufferQueueCore::GetMaxBufferCountLocked(bool async) const {
 
     if (override_max_buffer_count != 0) {
         ASSERT(override_max_buffer_count >= min_buffer_count);
-        return override_max_buffer_count;
+        max_buffer_count = override_max_buffer_count;
     }
 
+    // A new override may shrink the queue while higher-numbered slots are still in flight.
+    // Preserve queued/dequeued slots until the consumer drains them, then shrink naturally.
     for (s32 slot = max_buffer_count; slot < BufferQueueDefs::NUM_BUFFER_SLOTS; ++slot) {
         const auto state = slots[slot].buffer_state;
         if (state == BufferState::Queued || state == BufferState::Dequeued) {

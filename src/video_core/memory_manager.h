@@ -7,6 +7,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <string_view>
 #include <vector>
 #include <boost/container/small_vector.hpp>
 
@@ -84,7 +85,8 @@ public:
      * Flushes and Invalidations, respectively to each operation.
      */
     void ReadBlock(GPUVAddr gpu_src_addr, void* dest_buffer, std::size_t size,
-                   VideoCommon::CacheType which = VideoCommon::CacheType::All) const;
+                   VideoCommon::CacheType which = VideoCommon::CacheType::All,
+                   std::string_view call_site = "MemoryManager::ReadBlock") const;
     void WriteBlock(GPUVAddr gpu_dest_addr, const void* src_buffer, std::size_t size,
                     VideoCommon::CacheType which = VideoCommon::CacheType::All);
     void CopyBlock(GPUVAddr gpu_dest_addr, GPUVAddr gpu_src_addr, std::size_t size,
@@ -100,7 +102,8 @@ public:
      * WriteBlockUnsafe instead of WriteBlock since it shouldn't invalidate the texture
      * being flushed.
      */
-    void ReadBlockUnsafe(GPUVAddr gpu_src_addr, void* dest_buffer, std::size_t size) const;
+    void ReadBlockUnsafe(GPUVAddr gpu_src_addr, void* dest_buffer, std::size_t size,
+                         std::string_view call_site = "MemoryManager::ReadBlockUnsafe") const;
     void WriteBlockUnsafe(GPUVAddr gpu_dest_addr, const void* src_buffer, std::size_t size);
     void WriteBlockCached(GPUVAddr gpu_dest_addr, const void* src_buffer, std::size_t size);
 
@@ -164,7 +167,7 @@ private:
 
     template <bool is_safe>
     void ReadBlockImpl(GPUVAddr gpu_src_addr, void* dest_buffer, std::size_t size,
-                       VideoCommon::CacheType which) const;
+                       VideoCommon::CacheType which, std::string_view call_site) const;
 
     template <bool is_safe>
     void WriteBlockImpl(GPUVAddr gpu_dest_addr, const void* src_buffer, std::size_t size,

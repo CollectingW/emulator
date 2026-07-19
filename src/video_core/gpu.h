@@ -168,6 +168,9 @@ public:
     /// Tick pending requests within the GPU.
     void TickWork();
 
+    /// Wait until previously queued work has been processed by the GPU emulation thread.
+    void SynchronizeGPUThread();
+
     /// Gets a mutable reference to the Host1x interface
     [[nodiscard]] Host1x::Host1x& Host1x();
 

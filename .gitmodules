@@ -14,9 +14,6 @@
 [submodule "libusb"]
 	path = externals/libusb/libusb
 	url = https://github.com/libusb/libusb.git
-[submodule "discord-rpc"]
-	path = externals/discord-rpc
-	url = https://github.com/yuzu-mirror/discord-rpc.git
 [submodule "Vulkan-Headers"]
 	path = externals/Vulkan-Headers
 	url = https://github.com/KhronosGroup/Vulkan-Headers.git

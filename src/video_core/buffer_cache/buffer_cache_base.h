@@ -141,6 +141,7 @@ public:
     u32 uniform_buffer_skip_cache_size = DEFAULT_SKIP_CACHE_SIZE;
 
     bool has_deleted_buffers = false;
+    bool has_logged_unmapped_storage_buffer = false;
 
     std::array<u32, NUM_STAGES> dirty_uniform_buffers{};
     std::array<u32, NUM_STAGES> fast_bound_uniform_buffers{};

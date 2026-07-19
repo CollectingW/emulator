@@ -4,12 +4,11 @@
 
 #include "citron/configuration/configure_filesystem.h"
 #include <QDir>
+#include <QDirIterator>
 #include <QFileDialog>
-#include <QFutureWatcher>
 #include <QMessageBox>
 #include <QProgressDialog>
 #include <QStringList>
-#include <QtConcurrent/QtConcurrent>
 #include "citron/uisettings.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
@@ -32,17 +31,6 @@ ConfigureFilesystem::ConfigureFilesystem(QWidget* parent)
     connect(ui->reset_game_list_cache, &QPushButton::pressed, this, &ConfigureFilesystem::ResetMetadata);
     connect(ui->gamecard_inserted, &QCheckBox::checkStateChanged, this, &ConfigureFilesystem::UpdateEnabledControls);
     connect(ui->gamecard_current_game, &QCheckBox::checkStateChanged, this, &ConfigureFilesystem::UpdateEnabledControls);
-
-#ifdef __linux__
-    connect(ui->enable_backups_checkbox, &QCheckBox::toggled, this, &ConfigureFilesystem::UpdateEnabledControls);
-    connect(ui->custom_backup_location_checkbox, &QCheckBox::toggled, this, &ConfigureFilesystem::UpdateEnabledControls);
-    connect(ui->custom_backup_location_button, &QToolButton::pressed, this, [this] {
-        QString dir = QFileDialog::getExistingDirectory(this, tr("Select Backup Directory"));
-        if (!dir.isEmpty()) {
-            ui->custom_backup_location_edit->setText(dir);
-        }
-    });
-#endif
 }
 
 ConfigureFilesystem::~ConfigureFilesystem() = default;
@@ -71,19 +59,6 @@ void ConfigureFilesystem::SetConfiguration() {
 
     // NCA Scanning Toggle
     ui->scan_nca->setChecked(UISettings::values.scan_nca.GetValue());
-
-#ifdef __linux__
-    ui->enable_backups_checkbox->setChecked(UISettings::values.updater_enable_backups.GetValue());
-    const std::string& backup_path = UISettings::values.updater_backup_path.GetValue();
-    if (!backup_path.empty()) {
-        ui->custom_backup_location_checkbox->setChecked(true);
-        ui->custom_backup_location_edit->setText(QString::fromStdString(backup_path));
-    } else {
-        ui->custom_backup_location_checkbox->setChecked(false);
-    }
-    m_old_custom_backup_enabled = ui->custom_backup_location_checkbox->isChecked();
-    m_old_backup_path = ui->custom_backup_location_edit->text();
-#endif
 
     UpdateEnabledControls();
 }
@@ -124,47 +99,6 @@ void ConfigureFilesystem::ApplyConfiguration() {
             MigrateSavesToGlobal(QString::fromStdString(new_path));
         }
     }
-
-#ifdef __linux__
-    UISettings::values.updater_enable_backups = ui->enable_backups_checkbox->isChecked();
-    const bool new_custom_backup_enabled = ui->custom_backup_location_checkbox->isChecked();
-    const QString new_backup_path = ui->custom_backup_location_edit->text();
-
-    if (new_custom_backup_enabled) {
-        UISettings::values.updater_backup_path = new_backup_path.toStdString();
-    } else {
-        UISettings::values.updater_backup_path = "";
-    }
-
-    QByteArray appimage_path_env = qgetenv("APPIMAGE");
-    const QString default_path = appimage_path_env.isEmpty() ? QString() : QFileInfo(QString::fromUtf8(appimage_path_env)).dir().filePath(QStringLiteral("backup"));
-
-    QString old_path_to_check;
-    if (m_old_custom_backup_enabled && !m_old_backup_path.isEmpty()) {
-        old_path_to_check = m_old_backup_path;
-    } else if (!default_path.isEmpty()) {
-        old_path_to_check = default_path;
-    }
-
-    QString new_path_to_check;
-    if (new_custom_backup_enabled && !new_backup_path.isEmpty()) {
-        new_path_to_check = new_backup_path;
-    } else if (!default_path.isEmpty()) {
-        new_path_to_check = default_path;
-    }
-
-    if (!old_path_to_check.isEmpty() && !new_path_to_check.isEmpty() && old_path_to_check != new_path_to_check) {
-        QDir old_dir(old_path_to_check);
-        if (old_dir.exists() && !old_dir.entryInfoList({QStringLiteral("citron-backup-*.AppImage")}, QDir::Files).isEmpty()) {
-            QMessageBox::StandardButton reply = QMessageBox::question(this, tr("Migrate AppImage Backups?"),
-                tr("The backup location has changed. Would you like to move your existing backups from the old location to the new one?"),
-                QMessageBox::Yes | QMessageBox::No);
-            if (reply == QMessageBox::Yes) {
-                MigrateBackups(old_path_to_check, new_path_to_check);
-            }
-        }
-    }
-#endif
 }
 
 void ConfigureFilesystem::SetDirectory(DirectoryTarget target, QLineEdit* edit) {
@@ -193,7 +127,7 @@ void ConfigureFilesystem::SetDirectory(DirectoryTarget target, QLineEdit* edit) 
     QString str;
     if (target == DirectoryTarget::Gamecard) {
         str = QFileDialog::getOpenFileName(this, caption, QFileInfo(edit->text()).dir().path(),
-                                           QStringLiteral("NX Gamecard;*.xci"));
+                                           QStringLiteral("NX Gamecard (*.xci *.dxci)"));
     } else {
         str = QFileDialog::getExistingDirectory(this, caption, edit->text());
     }
@@ -225,94 +159,11 @@ void ConfigureFilesystem::UpdateEnabledControls() {
     ui->gamecard_path_button->setEnabled(ui->gamecard_inserted->isChecked() && !ui->gamecard_current_game->isChecked());
     ui->global_save_directory_edit->setEnabled(ui->global_save_directory_checkbox->isChecked());
     ui->global_save_directory_button->setEnabled(ui->global_save_directory_checkbox->isChecked());
-
-#ifdef __linux__
-    ui->updater_group->setVisible(true);
-    bool backups_enabled = ui->enable_backups_checkbox->isChecked();
-    ui->custom_backup_location_checkbox->setEnabled(backups_enabled);
-
-    bool useCustomBackup = backups_enabled && ui->custom_backup_location_checkbox->isChecked();
-    ui->custom_backup_location_edit->setEnabled(useCustomBackup);
-    ui->custom_backup_location_button->setEnabled(useCustomBackup);
-#else
-    ui->updater_group->setVisible(false);
-#endif
 }
 
 void ConfigureFilesystem::RetranslateUI() {
     ui->retranslateUi(this);
 }
-
-#ifdef __linux__
-void ConfigureFilesystem::MigrateBackups(const QString& old_path, const QString& new_path) {
-    QDir old_dir(old_path);
-    if (!old_dir.exists()) {
-        QMessageBox::warning(this, tr("Migration Error"), tr("The old backup location does not exist."));
-        return;
-    }
-
-    QStringList name_filters;
-    name_filters << QStringLiteral("citron-backup-*.AppImage");
-    QFileInfoList files_to_move = old_dir.entryInfoList(name_filters, QDir::Files);
-
-    if (files_to_move.isEmpty()) {
-        QMessageBox::information(this, tr("Migration Complete"), tr("No backup files were found to migrate."));
-        return;
-    }
-
-    auto progress = new QProgressDialog(tr("Moving backup files..."), tr("Cancel"), 0, files_to_move.count(), this);
-    progress->setWindowModality(Qt::WindowModal);
-    progress->setMinimumDuration(1000);
-    progress->show();
-
-    auto watcher = new QFutureWatcher<bool>(this);
-    connect(watcher, &QFutureWatcher<bool>::finished, this, [this, watcher, progress] {
-        progress->close();
-        if (watcher->future().isCanceled()) {
-            QMessageBox::warning(this, tr("Migration Canceled"), tr("The migration was canceled. Some files may have been moved."));
-        } else if (watcher->future().result()) {
-            QMessageBox::information(this, tr("Migration Complete"), tr("All backup files were successfully moved to the new location."));
-        } else {
-            QMessageBox::critical(this, tr("Migration Failed"), tr("An error occurred while moving files. Some files may not have been moved. Please check both locations."));
-        }
-        watcher->deleteLater();
-    });
-    connect(progress, &QProgressDialog::canceled, watcher, &QFutureWatcher<void>::cancel);
-
-    QFuture<bool> future = QtConcurrent::run([=] {
-        QDir new_dir(new_path);
-        if (!new_dir.exists()) {
-            if (!new_dir.mkpath(QStringLiteral("."))) {
-                return false;
-            }
-        }
-
-        for (int i = 0; i < files_to_move.count(); ++i) {
-            if (progress->wasCanceled()) {
-                return false;
-            }
-            progress->setValue(i);
-            const auto& file_info = files_to_move.at(i);
-            QString new_file_path = new_dir.filePath(file_info.fileName());
-
-            if (QFile::exists(new_file_path)) {
-                if (!QFile::remove(new_file_path)) {
-                    return false; // Failed to remove existing file
-                }
-            }
-            if (!QFile::copy(file_info.absoluteFilePath(), new_file_path)) {
-                return false; // Copy operation failed
-            }
-            if (!QFile::remove(file_info.absoluteFilePath())) {
-                return false; // Delete operation failed
-            }
-        }
-        return true;
-    });
-
-    watcher->setFuture(future);
-}
-#endif
 
 void ConfigureFilesystem::MigrateSavesToGlobal(const QString& new_global_path) {
     const QString nand_root = QString::fromStdString(Common::FS::GetCitronPathString(Common::FS::CitronPath::NANDDir));

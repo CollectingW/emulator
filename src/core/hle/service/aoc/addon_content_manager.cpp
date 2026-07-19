@@ -61,10 +61,6 @@ static std::vector<u64> GetAOCTitleIDsForBase(const std::vector<u64>& add_on_con
     return out;
 }
 
-static u32 GetGuestAOCIndex(std::size_t ordinal) {
-    return static_cast<u32>(ordinal + 1);
-}
-
 IAddOnContentManager::IAddOnContentManager(Core::System& system_)
     : ServiceFramework{system_, "aoc:u"}, add_on_content{AccumulateAOCTitleIDs(system)},
       service_context{system_, "aoc:u"} {
@@ -154,18 +150,14 @@ Result IAddOnContentManager::ListAddOnContent(Out<u32> out_count,
 
     const auto matching_aocs = GetAOCTitleIDsForBase(add_on_content, current);
 
-    // Emit sorted ordinals (1-based position in the full sorted list).
-    // Disabled items are skipped, but ordinals come from positions in the FULL list so
-    // fsp_srv.cpp's GetAOCPhysicalTitleIDsForBase can resolve them correctly without
-    // needing to know which items were disabled.
     std::vector<u32> out;
-    for (std::size_t i = 0; i < matching_aocs.size(); ++i) {
+    for (const u64 aoc_tid : matching_aocs) {
         const auto item_key =
-            fmt::format("DLC {:04d}", matching_aocs[i] & FileSys::AOC_TITLE_ID_MASK);
+            fmt::format("DLC {:04d}", aoc_tid & FileSys::AOC_TITLE_ID_MASK);
         if (std::find(disabled.begin(), disabled.end(), item_key) != disabled.end()) {
             continue;
         }
-        out.push_back(GetGuestAOCIndex(i));
+        out.push_back(static_cast<u32>(FileSys::GetAOCID(aoc_tid)));
     }
 
     R_UNLESS(out.size() >= offset, ResultUnknown);
@@ -229,13 +221,13 @@ Result IAddOnContentManager::ListAddOnContentByApplicationId(
     const auto matching_aocs = GetAOCTitleIDsForBase(add_on_content, current);
 
     std::vector<u32> out;
-    for (std::size_t i = 0; i < matching_aocs.size(); ++i) {
+    for (const u64 aoc_tid : matching_aocs) {
         const auto item_key =
-            fmt::format("DLC {:04d}", matching_aocs[i] & FileSys::AOC_TITLE_ID_MASK);
+            fmt::format("DLC {:04d}", aoc_tid & FileSys::AOC_TITLE_ID_MASK);
         if (std::find(disabled.begin(), disabled.end(), item_key) != disabled.end()) {
             continue;
         }
-        out.push_back(GetGuestAOCIndex(i));
+        out.push_back(static_cast<u32>(FileSys::GetAOCID(aoc_tid)));
     }
 
     R_UNLESS(out.size() >= offset, ResultUnknown);
@@ -279,8 +271,15 @@ Result IAddOnContentManager::PrepareAddOnContent(s32 addon_index, ClientProcessI
     const auto aoc_base_id = FileSys::GetAOCBaseTitleID(program_id);
     const auto matching_aocs = GetAOCTitleIDsForBase(add_on_content, program_id);
     u64 physical_title_id = 0;
-    if (addon_index > 0 && static_cast<std::size_t>(addon_index) <= matching_aocs.size()) {
-        physical_title_id = matching_aocs[static_cast<std::size_t>(addon_index) - 1];
+    if (addon_index > 0) {
+        const auto it = std::find_if(matching_aocs.begin(), matching_aocs.end(),
+                                     [addon_index](u64 title_id) {
+                                         return FileSys::GetAOCID(title_id) ==
+                                                static_cast<u32>(addon_index);
+                                     });
+        if (it != matching_aocs.end()) {
+            physical_title_id = *it;
+        }
     }
 
     LOG_DEBUG(Service_AOC,

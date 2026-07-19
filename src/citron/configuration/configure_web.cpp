@@ -15,10 +15,6 @@ ConfigureWeb::ConfigureWeb(QWidget* parent)
     ui->setupUi(this);
     connect(ui->button_reset_token, &QPushButton::clicked, this, &ConfigureWeb::ResetToken);
 
-#ifndef USE_DISCORD_PRESENCE
-    ui->discord_group->setVisible(false);
-#endif
-
     SetConfiguration();
     RetranslateUI();
 }
@@ -47,13 +43,10 @@ void ConfigureWeb::SetConfiguration() {
     }
 
     ui->edit_token->setText(QString::fromStdString(Settings::values.citron_token.GetValue()));
-    ui->toggle_discordrpc->setChecked(UISettings::values.enable_discord_presence.GetValue());
     ui->edit_steam_grid_db_api_key->setText(QString::fromStdString(UISettings::values.steam_grid_db_api_key.GetValue()));
 }
 
 void ConfigureWeb::ApplyConfiguration() {
-    UISettings::values.enable_discord_presence = ui->toggle_discordrpc->isChecked();
-
     // Username is set from the profile manager via UpdateCurrentUser()
     // Use a default value if username is still empty
     if (Settings::values.citron_username.GetValue().empty()) {

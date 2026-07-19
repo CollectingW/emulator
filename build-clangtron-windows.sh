@@ -363,7 +363,8 @@ require_llvm_mingw() {
         return 0
     fi
     # Linux: download if needed, then activate.
-    ensure_llvm_mingw    setup_llvm_mingw_path
+    ensure_llvm_mingw
+    setup_llvm_mingw_path
 }
 
 check_tool() {
@@ -875,11 +876,11 @@ _profile_rt_valid() {
 
         if [[ "${lib}" == *profile-x86_64.a || "${lib}" == *x86_64-w64-mingw32/libclang_rt.profile.a ]]; then
             local required=(
-                ' lprofProfileDumped$'
-                ' __llvm_profile_mmap$'
-                ' __llvm_profile_flock$'
-                ' __llvm_profile_munmap$'
-                ' __llvm_profile_madvise$'
+                'lprofProfileDumped$'
+                '__llvm_profile_mmap$'
+                '__llvm_profile_flock$'
+                '__llvm_profile_munmap$'
+                '__llvm_profile_madvise$'
             )
             local sym
             for sym in "${required[@]}"; do
@@ -1246,7 +1247,8 @@ namespace _com_util {
 COMSUPP_CPP_EOF
 
         # llvm-mingw wrapper sets --target, --sysroot, -stdlib=libc++ automatically
-        "${MINGW_CLANGPP}" -O2 -c "${stub_src}" -o "${stub_obj}" \            || error "Failed to compile comsupp_stubs.o"
+        "${MINGW_CLANGPP}" -O2 -c "${stub_src}" -o "${stub_obj}" \
+            || error "Failed to compile comsupp_stubs.o"
 
         success "comsupp_stubs.o compiled: ${stub_obj}"
     fi
@@ -2647,8 +2649,11 @@ stage_use() {
     ensure_vulkan_import_lib
 
     # ── Sentinel check: verify generate/use LTO and PGO modes match ─────────
+    # PGO_MODE=="none" is exempt: a --pgo none use build consumes no
+    # profraw/profdata from generate at all, so there is nothing that could
+    # actually be mismatched -- see the identical exemption in stage_clangcl().
     local _gen_cfg="${BUILD_ROOT}/.citron-gen-config"
-    if [[ -f "${_gen_cfg}" ]]; then
+    if [[ "${PGO_MODE}" != "none" && -f "${_gen_cfg}" ]]; then
         local _gen_lto _gen_pgo
         _gen_lto=$(awk -F= '/^LTO=/{print $2; exit}' "${_gen_cfg}" 2>/dev/null || true)
         _gen_pgo=$(awk -F= '/^PGO=/{print $2; exit}' "${_gen_cfg}" 2>/dev/null || true)
@@ -4215,8 +4220,15 @@ stage_clangcl() {
     # before a long build wastes time. The write for STAGE=="generate" happens
     # later, only after the build succeeds, so a failed/invalid generate run
     # never leaves stale sentinel state for csgenerate/use to read.
+    #
+    # PGO_MODE=="none" is exempt entirely: a --pgo none build (use only --
+    # csgenerate always requires --pgo ir, enforced above) consumes no
+    # profraw/profdata from generate at all, so there is nothing that could
+    # actually be mismatched. It's an independent LTO-only build that should
+    # succeed regardless of what PGO mode (or LTO mode) a prior generate run
+    # used.
     local _gen_cfg="${BUILD_ROOT}/.citron-clangcl-gen-config"
-    if [[ "${STAGE}" != "generate" && -f "${_gen_cfg}" ]]; then
+    if [[ "${STAGE}" != "generate" && "${PGO_MODE}" != "none" && -f "${_gen_cfg}" ]]; then
         local _gen_lto _gen_pgo
         _gen_lto=$(awk -F= '/^LTO=/{print $2; exit}' "${_gen_cfg}" 2>/dev/null || true)
         _gen_pgo=$(awk -F= '/^PGO=/{print $2; exit}' "${_gen_cfg}" 2>/dev/null || true)
@@ -4689,7 +4701,7 @@ copy /Y "${build_copy_win}\\bin\\${config}\\citron-room.exe" "${package_copy_win
 if errorlevel 1 exit /b %errorlevel%
 if exist "${build_copy_win}\\bin\\${config}\\*.dll" (
   copy /Y "${build_copy_win}\\bin\\${config}\\*.dll" "${package_copy_win}\\" >NUL
-  if errorlevel 1 exit /b %errorlevel%
+  if errorlevel 1 exit /b 1
 )
 if /I "${config}"=="RelWithDebInfo" (
   for %%P in (citron.pdb citron-cmd.pdb citron-room.pdb) do (

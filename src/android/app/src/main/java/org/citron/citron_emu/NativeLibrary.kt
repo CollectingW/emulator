@@ -459,10 +459,10 @@ object NativeLibrary {
     external fun removeUpdate(programId: String)
 
     /**
-     * Removes all DLC for a  [programId]
-     * @param programId String representation of a game's program ID
+     * Removes a single installed DLC with the given [titleId]
+     * @param titleId String representation of the DLC title ID
      */
-    external fun removeDLC(programId: String)
+    external fun removeDLC(titleId: String)
 
     /**
      * Removes a mod installed for a given [programId]
