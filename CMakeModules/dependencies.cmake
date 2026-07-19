@@ -584,6 +584,7 @@ if (CITRON_ENABLE_TRACY AND NOT TARGET Tracy::TracyClient)
         "TRACY_NO_VSYNC_CAPTURE ON"
         "TRACY_NO_FRAME_IMAGE ON"
         "TRACY_FIBERS ON"
+        "TRACY_ONLY_IPV4 ON"
         # NOTE: TRACY_CALLSTACK is NOT passed here because Tracy's set_option() macro
         # only supports boolean ON/OFF via CMake option(), which would produce
         # -DTRACY_CALLSTACK with no value.  Tracy uses TRACY_CALLSTACK as an integer
@@ -604,11 +605,15 @@ if (CITRON_ENABLE_TRACY AND NOT TARGET Tracy::TracyClient)
     if (TARGET TracyClient)
         # Ensure LTO is completely disabled on the TracyClient library to avoid toolchain mismatches during PGO builds
         set_target_properties(TracyClient PROPERTIES INTERPROCEDURAL_OPTIMIZATION FALSE)
-        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
             target_compile_options(TracyClient PRIVATE
                 "-fno-lto"
                 "-fno-profile-generate"
                 "-fno-profile-use"
+            )
+        endif()
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang")
+            target_compile_options(TracyClient PRIVATE
                 "-fno-profile-instr-generate"
                 "-fno-profile-instr-use"
                 "-fno-cs-profile-generate"

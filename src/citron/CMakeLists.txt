@@ -494,17 +494,33 @@ if (NOT MSVC AND NOT APPLE)
     # Force-include critical static archives and resolve cycles
     if (ENABLE_WEB_SERVICE)
         target_compile_definitions(citron PRIVATE -DENABLE_WEB_SERVICE)
-        target_link_libraries(citron PRIVATE
-            "-Wl,--start-group"
-            "-Wl,--whole-archive" common core input_common frontend_common network video_core web_service "-Wl,--no-whole-archive"
-            "-Wl,--end-group"
-        )
+        if (CITRON_ENABLE_TRACY AND TARGET TracyClient)
+            target_link_libraries(citron PRIVATE
+                "-Wl,--start-group"
+                "-Wl,--whole-archive" common core input_common frontend_common network video_core web_service TracyClient "-Wl,--no-whole-archive"
+                "-Wl,--end-group"
+            )
+        else()
+            target_link_libraries(citron PRIVATE
+                "-Wl,--start-group"
+                "-Wl,--whole-archive" common core input_common frontend_common network video_core web_service "-Wl,--no-whole-archive"
+                "-Wl,--end-group"
+            )
+        endif()
     else()
-        target_link_libraries(citron PRIVATE
-            "-Wl,--start-group"
-            "-Wl,--whole-archive" common core input_common frontend_common network video_core "-Wl,--no-whole-archive"
-            "-Wl,--end-group"
-        )
+        if (CITRON_ENABLE_TRACY AND TARGET TracyClient)
+            target_link_libraries(citron PRIVATE
+                "-Wl,--start-group"
+                "-Wl,--whole-archive" common core input_common frontend_common network video_core TracyClient "-Wl,--no-whole-archive"
+                "-Wl,--end-group"
+            )
+        else()
+            target_link_libraries(citron PRIVATE
+                "-Wl,--start-group"
+                "-Wl,--whole-archive" common core input_common frontend_common network video_core "-Wl,--no-whole-archive"
+                "-Wl,--end-group"
+            )
+        endif()
     endif()
 else()
     target_link_libraries(citron PRIVATE common core input_common frontend_common network video_core)

@@ -35,17 +35,33 @@ if (NOT MSVC AND NOT APPLE)
     # Force-include critical static archives and resolve cycles
     if (ENABLE_WEB_SERVICE)
         target_compile_definitions(citron-cmd PRIVATE -DENABLE_WEB_SERVICE)
-        target_link_libraries(citron-cmd PRIVATE
-            "-Wl,--start-group"
-            "-Wl,--whole-archive" common core input_common frontend_common network web_service "-Wl,--no-whole-archive"
-            "-Wl,--end-group"
-        )
+        if (CITRON_ENABLE_TRACY AND TARGET TracyClient)
+            target_link_libraries(citron-cmd PRIVATE
+                "-Wl,--start-group"
+                "-Wl,--whole-archive" common core input_common frontend_common network web_service TracyClient "-Wl,--no-whole-archive"
+                "-Wl,--end-group"
+            )
+        else()
+            target_link_libraries(citron-cmd PRIVATE
+                "-Wl,--start-group"
+                "-Wl,--whole-archive" common core input_common frontend_common network web_service "-Wl,--no-whole-archive"
+                "-Wl,--end-group"
+            )
+        endif()
     else()
-        target_link_libraries(citron-cmd PRIVATE
-            "-Wl,--start-group"
-            "-Wl,--whole-archive" common core input_common frontend_common network "-Wl,--no-whole-archive"
-            "-Wl,--end-group"
-        )
+        if (CITRON_ENABLE_TRACY AND TARGET TracyClient)
+            target_link_libraries(citron-cmd PRIVATE
+                "-Wl,--start-group"
+                "-Wl,--whole-archive" common core input_common frontend_common network TracyClient "-Wl,--no-whole-archive"
+                "-Wl,--end-group"
+            )
+        else()
+            target_link_libraries(citron-cmd PRIVATE
+                "-Wl,--start-group"
+                "-Wl,--whole-archive" common core input_common frontend_common network "-Wl,--no-whole-archive"
+                "-Wl,--end-group"
+            )
+        endif()
     endif()
 else()
     target_link_libraries(citron-cmd PRIVATE common core input_common frontend_common)

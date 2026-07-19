@@ -116,8 +116,8 @@ option(CITRON_ENABLE_PGO_USE "Build using PGO profile data for optimization (Sta
 option(CITRON_ENABLE_TRACY "Enable Tracy profiler instrumentation (default off, zero overhead when disabled)" OFF)
 option(CITRON_ENABLE_TRACY_MEMORY "Enable verbose Tracy profiling for memory read/write operations (high overhead)" OFF)
 
-if (CITRON_ENABLE_TRACY AND NOT CITRON_USE_CPM)
-    message(FATAL_ERROR "CITRON_ENABLE_TRACY requires CITRON_USE_CPM=ON (Tracy is fetched via CPM in CMakeModules/dependencies.cmake)")
+if (CITRON_ENABLE_TRACY AND NOT CITRON_USE_CPM AND NOT TARGET Tracy::TracyClient)
+    message(FATAL_ERROR "CITRON_ENABLE_TRACY requires CITRON_USE_CPM=ON (Tracy is fetched via CPM in CMakeModules/dependencies.cmake) or an externally provided Tracy::TracyClient target.")
 endif()
 set(CITRON_PGO_PROFILE_DIR "${CMAKE_BINARY_DIR}/pgo-profiles" CACHE PATH "Directory to store PGO profile data")
 
