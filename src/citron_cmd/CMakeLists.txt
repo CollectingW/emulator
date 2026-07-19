@@ -70,7 +70,7 @@ else()
     # worker thread) gets stripped because nothing in citron-cmd.exe directly
     # references a TracyClient symbol.
     if (MSVC AND CITRON_ENABLE_TRACY AND TARGET TracyClient)
-        target_link_options(citron-cmd PRIVATE "/WHOLEARCHIVE:$<TARGET_FILE_NAME:TracyClient>")
+        target_link_options(citron-cmd PRIVATE "/WHOLEARCHIVE:$<TARGET_FILE:TracyClient>")
         target_link_libraries(citron-cmd PRIVATE common core input_common frontend_common TracyClient)
     elseif (APPLE AND CITRON_ENABLE_TRACY AND TARGET TracyClient)
         target_link_options(citron-cmd PRIVATE "-Wl,-force_load,$<TARGET_FILE:TracyClient>")

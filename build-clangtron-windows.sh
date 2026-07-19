@@ -4653,6 +4653,35 @@ stage_clangcl() {
     local pgo_link_flags_batch="${pgo_link_flags//%/%%}"
     local pgo_flags_dash_batch="${pgo_flags_dash//%/%%}"
 
+    # NOTE: CITRON_ENABLE_LTO and CITRON_ENABLE_PGO_GENERATE/USE are deliberately left
+    # OFF below, even though this build may genuinely be doing LTO/PGO via the raw
+    # /clang:-flto=... and /clang:-fprofile-instr-... flags already baked into
+    # CMAKE_C/CXX_FLAGS_${config} above. Do NOT "fix" these to reflect real state --
+    # turning them ON activates CMake-native, MSVC-flavored codepaths that fire
+    # whenever MSVC==TRUE (true for clang-cl) and stack incompatible flags on top of
+    # the script's own Clang-native ones:
+    #   - citron_configure_lto() (called from common/core/video_core/shader_recompiler/
+    #     network/audio_core/hid_core/input_common/frontend_common/web_service) sets
+    #     CMake's INTERPROCEDURAL_OPTIMIZATION property, which for an MSVC-ABI compiler
+    #     means CMake injects /GL at compile time and expects /LTCG at link time --
+    #     MSVC's own whole-program-optimization mechanism, not Clang's bitcode LTO.
+    #   - the top-level `if (MSVC) ... add_link_options(/LTCG)` block (CMakeLists.txt)
+    #     fires on the same OR condition.
+    #   - citron_configure_pgo()'s MSVC branch adds /FASTGENPROFILE, /PGD:, and
+    #     /USEPROFILE:PGD= link options -- MSVC's .pgd-based PGO, a completely
+    #     different, incompatible system from Clang's .profraw/.profdata instr-PGO
+    #     the script already sets up via -fprofile-instr-generate/-fprofile-instr-use.
+    #   - PGO.cmake's `if (MSVC) ... add_compile_options(/GL)` block fires too, and is
+    #     not gated by CITRON_PGO_FLAGS_MANAGED_BY_SCRIPT (that guard only wraps the
+    #     GNU/Clang branch, not the MSVC one).
+    # TracyClient's own LTO/PGO opt-out in dependencies.cmake does not depend on these
+    # vars being accurate -- it unconditionally forces INTERPROCEDURAL_OPTIMIZATION
+    # FALSE and appends -fno-lto/-fno-profile-* as target-level compile options on
+    # TracyClient regardless, so Tracy stays correctly isolated either way.
+    local _clangcl_lto_cmake="OFF"
+    local _clangcl_pgo_generate="OFF"
+    local _clangcl_pgo_use="OFF"
+
     cat > "${build_dir}/build-clang-cl.cmd" <<CLANGCL_CMD_EOF
 @echo off
 setlocal
@@ -4682,8 +4711,9 @@ ${sccache_cmake_args}
   -DCLANGCL_OPENSSL_EXTRA_CFLAGS="${pgo_flags_dash_batch}" ^
   -DCLANGCL_FFMPEG_EXTRA_CFLAGS="${pgo_flags_dash_batch}" ^
 ${qt_cmake_line}
-  -DCITRON_ENABLE_LTO=OFF ^
-  -DCITRON_ENABLE_PGO_GENERATE=OFF -DCITRON_ENABLE_PGO_USE=OFF ^
+  -DCITRON_ENABLE_LTO=${_clangcl_lto_cmake} ^
+  -DCITRON_ENABLE_TRACY=${TRACY_BUILD} ^
+  -DCITRON_ENABLE_PGO_GENERATE=${_clangcl_pgo_generate} -DCITRON_ENABLE_PGO_USE=${_clangcl_pgo_use} ^
   -DCMAKE_C_FLAGS_${config^^}="${config_compile_flags} ${flags_batch}" -DCMAKE_CXX_FLAGS_${config^^}="${config_compile_flags} ${flags_batch}" ^
   -DCMAKE_EXE_LINKER_FLAGS_${config^^}="${config_link_flags}" ^
   -DCITRON_CLANGCL_PGO_COMPILE_FLAGS="${pgo_flags_batch}" -DCITRON_CLANGCL_PGO_LINK_FLAGS="${pgo_link_flags_batch}" ^

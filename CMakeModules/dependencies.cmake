@@ -585,6 +585,17 @@ if (CITRON_ENABLE_TRACY AND NOT TARGET Tracy::TracyClient)
         "TRACY_NO_FRAME_IMAGE ON"
         "TRACY_FIBERS ON"
         "TRACY_ONLY_IPV4 ON"
+        # With /WHOLEARCHIVE forcing TracyClient's translation unit to link in on
+        # MSVC/clang-cl, its global static constructor (which spawns the profiler's
+        # background thread) now runs eagerly during CRT static init, before main()
+        # -- this has been observed to hang process startup on Windows with no log,
+        # no window, and no crash dump. TRACY_DELAYED_INIT moves that work out of the
+        # static constructor and into a lazy first-call path triggered by the first
+        # real zone/instrumentation macro, which by then runs safely after CRT/Qt
+        # startup has completed. Whole-archive linking still keeps the translation
+        # unit's *functions* reachable regardless, so the port still opens once the
+        # first zone fires.
+        "TRACY_DELAYED_INIT ON"
         # NOTE: TRACY_CALLSTACK is NOT passed here because Tracy's set_option() macro
         # only supports boolean ON/OFF via CMake option(), which would produce
         # -DTRACY_CALLSTACK with no value.  Tracy uses TRACY_CALLSTACK as an integer
