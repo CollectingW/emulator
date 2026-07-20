@@ -259,6 +259,13 @@ if (CITRON_ENABLE_TRACY)
     if (CITRON_ENABLE_TRACY_MEMORY)
         target_compile_definitions(common PUBLIC CITRON_ENABLE_TRACY_MEMORY=1)
     endif()
+    if (CITRON_ENABLE_TRACY_ALLOC)
+        # Global operator new/delete overrides -- only compiled in when this is
+        # explicitly on, so every other configuration keeps the default,
+        # un-instrumented allocator with no added indirection.
+        target_sources(common PRIVATE tracy_alloc.cpp)
+        target_compile_definitions(common PUBLIC CITRON_ENABLE_TRACY_ALLOC=1)
+    endif()
     target_link_libraries(common PUBLIC Tracy::TracyClient)
 endif()
 

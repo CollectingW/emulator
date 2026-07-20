@@ -71,6 +71,7 @@
 #                           v3 = x86-64-v3 (AVX2, BMI, FMA — Haswell+)
 #   --unity               Enable unity (jumbo) builds (~30-90% faster compile)
 #   --tracy               Enable Tracy profiler instrumentation (default off)
+#   --tracy-alloc         Enable Tracy heap allocator tracking (default off, requires --tracy)
 #   --relwithdebinfo      Include debug symbols alongside optimizations
 #   --clang-version N     Clang version to use (default: 21)
 #   --help, -h            Show this message
@@ -148,6 +149,7 @@ LTO_MODE="${LTO_MODE:-full}"
 PGO_MODE="${PGO_MODE:-ir}"
 UNITY_BUILD="${UNITY_BUILD:-OFF}"
 TRACY_BUILD="${TRACY_BUILD:-OFF}"
+TRACY_ALLOC_BUILD="${TRACY_ALLOC_BUILD:-OFF}"
 BUILD_TYPE="${BUILD_TYPE:-Release}"
 NO_PACKAGE="${NO_PACKAGE:-false}"
 CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE:-${HOME}/.cache/cpm}"
@@ -1064,6 +1066,7 @@ build_common_cmake_args() {
 
     [[ "${UNITY_BUILD}" == "ON" ]] && _CMAKE_ARGS+=("-DENABLE_UNITY_BUILD=ON")
     _CMAKE_ARGS+=("-DCITRON_ENABLE_TRACY=${TRACY_BUILD}")
+    _CMAKE_ARGS+=("-DCITRON_ENABLE_TRACY_ALLOC=${TRACY_ALLOC_BUILD}")
     # Ensure the function always returns 0: a trailing [[ ]] that evaluates false
     # would otherwise return exit code 1, triggering set -e in the caller.
     :
@@ -1850,6 +1853,8 @@ while [[ $# -gt 0 ]]; do
         --no-unity)       UNITY_BUILD="OFF"; shift ;;
         --tracy)          TRACY_BUILD="ON"; shift ;;
         --no-tracy)       TRACY_BUILD="OFF"; shift ;;
+        --tracy-alloc)    TRACY_ALLOC_BUILD="ON"; shift ;;
+        --no-tracy-alloc) TRACY_ALLOC_BUILD="OFF"; shift ;;
         --relwithdebinfo) BUILD_TYPE="RelWithDebInfo"; shift ;;
         --clang-version)
             CLANG_VERSION="$2"; _set_clang_tools; shift 2 ;;

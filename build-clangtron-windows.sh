@@ -163,6 +163,7 @@
 #     --relwithdebinfo         RelWithDebInfo (adds -g, keeps O3/LTO/PGO)
 #     --unity                  Unity builds (~30-90% faster compile, no runtime effect)
 #     --tracy                  Enable Tracy profiler instrumentation (default off)
+#     --tracy-alloc             Enable Tracy heap allocator tracking (default off, requires --tracy)
 #     --clang-version N        Host Clang version (default: 21)
 #     --llvm-mingw-version VER llvm-mingw release tag (default: 20260224)
 #
@@ -221,6 +222,7 @@ LTO_MODE="${LTO_MODE:-full}"
 PGO_MODE="${PGO_MODE:-ir}"          # ir|fe|none
 UNITY_BUILD="${UNITY_BUILD:-OFF}"   # ENABLE_UNITY_BUILD
 TRACY_BUILD="${TRACY_BUILD:-OFF}"   # CITRON_ENABLE_TRACY
+TRACY_ALLOC_BUILD="${TRACY_ALLOC_BUILD:-OFF}"   # CITRON_ENABLE_TRACY_ALLOC
 BUILD_TYPE="${BUILD_TYPE:-Release}" # Release|RelWithDebInfo
 CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE:-${HOME}/.cache/cpm}"
 CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE/#\~/$HOME}"
@@ -1988,6 +1990,7 @@ build_common_cmake_args() {
         "-DCMAKE_CXX_FLAGS=${MARCH_NATIVE}"
     )
     _CMAKE_ARGS+=("-DCITRON_ENABLE_TRACY=${TRACY_BUILD}")
+    _CMAKE_ARGS+=("-DCITRON_ENABLE_TRACY_ALLOC=${TRACY_ALLOC_BUILD}")
     # Always return 0 — a trailing [[ ]] that evaluates false would trigger set -e in caller.
     :
 }
@@ -4713,6 +4716,7 @@ ${sccache_cmake_args}
 ${qt_cmake_line}
   -DCITRON_ENABLE_LTO=${_clangcl_lto_cmake} ^
   -DCITRON_ENABLE_TRACY=${TRACY_BUILD} ^
+  -DCITRON_ENABLE_TRACY_ALLOC=${TRACY_ALLOC_BUILD} ^
   -DCITRON_ENABLE_PGO_GENERATE=${_clangcl_pgo_generate} -DCITRON_ENABLE_PGO_USE=${_clangcl_pgo_use} ^
   -DCMAKE_C_FLAGS_${config^^}="${config_compile_flags} ${flags_batch}" -DCMAKE_CXX_FLAGS_${config^^}="${config_compile_flags} ${flags_batch}" ^
   -DCMAKE_EXE_LINKER_FLAGS_${config^^}="${config_link_flags}" ^
@@ -4824,6 +4828,10 @@ while [[ $# -gt 0 ]]; do
             TRACY_BUILD="ON"; shift ;;
         --no-tracy)
             TRACY_BUILD="OFF"; shift ;;
+        --tracy-alloc)
+            TRACY_ALLOC_BUILD="ON"; shift ;;
+        --no-tracy-alloc)
+            TRACY_ALLOC_BUILD="OFF"; shift ;;
         --clang-version)
             CLANG_VERSION="$2"
             CLANG="clang-${CLANG_VERSION}"

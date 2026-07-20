@@ -114,7 +114,8 @@ option(CITRON_ENABLE_PGO_GENERATE "Build with PGO instrumentation to generate pr
 option(CITRON_ENABLE_PGO_USE "Build using PGO profile data for optimization (Stage 2)" OFF)
 
 option(CITRON_ENABLE_TRACY "Enable Tracy profiler instrumentation (default off, zero overhead when disabled)" OFF)
-option(CITRON_ENABLE_TRACY_MEMORY "Enable verbose Tracy profiling for memory read/write operations (high overhead)" OFF)
+option(CITRON_ENABLE_TRACY_MEMORY "Enable verbose Tracy profiling for guest memory read/write operations (high overhead)" OFF)
+option(CITRON_ENABLE_TRACY_ALLOC "Enable Tracy's heap allocator tracking (Memory panel) via global operator new/delete overrides" OFF)
 
 if (CITRON_ENABLE_TRACY AND NOT CITRON_USE_CPM AND NOT TARGET Tracy::TracyClient)
     message(FATAL_ERROR "CITRON_ENABLE_TRACY requires CITRON_USE_CPM=ON (Tracy is fetched via CPM in CMakeModules/dependencies.cmake) or an externally provided Tracy::TracyClient target.")
