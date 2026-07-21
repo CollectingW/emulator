@@ -117,6 +117,14 @@ option(CITRON_ENABLE_TRACY "Enable Tracy profiler instrumentation (default off, 
 option(CITRON_ENABLE_TRACY_MEMORY "Enable verbose Tracy profiling for guest memory read/write operations (high overhead)" OFF)
 option(CITRON_ENABLE_TRACY_ALLOC "Enable Tracy's heap allocator tracking (Memory panel) via global operator new/delete overrides" OFF)
 
+if ((CITRON_ENABLE_TRACY_MEMORY OR CITRON_ENABLE_TRACY_ALLOC) AND NOT CITRON_ENABLE_TRACY)
+    message(FATAL_ERROR
+        "CITRON_ENABLE_TRACY_MEMORY and CITRON_ENABLE_TRACY_ALLOC both require "
+        "CITRON_ENABLE_TRACY=ON -- they add profiling data on top of the base Tracy "
+        "instrumentation and do nothing without it. Pass -DCITRON_ENABLE_TRACY=ON "
+        "(or --tracy on the build scripts) alongside them.")
+endif()
+
 if (CITRON_ENABLE_TRACY AND NOT CITRON_USE_CPM AND NOT TARGET Tracy::TracyClient)
     message(FATAL_ERROR "CITRON_ENABLE_TRACY requires CITRON_USE_CPM=ON (Tracy is fetched via CPM in CMakeModules/dependencies.cmake) or an externally provided Tracy::TracyClient target.")
 endif()

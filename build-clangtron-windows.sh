@@ -4857,6 +4857,10 @@ done
 
 [[ -n "$STAGE" ]] || error "No stage specified. Run with --help for usage."
 
+if [[ "${TRACY_ALLOC_BUILD}" == "ON" && "${TRACY_BUILD}" != "ON" ]]; then
+    error "--tracy-alloc requires --tracy (it adds heap tracking on top of the base Tracy instrumentation and does nothing without it)."
+fi
+
 if [[ "${COMPILER_MODE}" == "clang-cl" ]]; then
     if [[ "${STAGE}" == "setup" ]]; then
         stage_setup

@@ -1870,6 +1870,10 @@ done
 [[ -n "${STAGE}" ]] \
     || error "No stage specified.\nUsage: $0 <stage> [options]\nStages: setup generate csgenerate merge summary use bolt clean"
 
+if [[ "${TRACY_ALLOC_BUILD}" == "ON" && "${TRACY_BUILD}" != "ON" ]]; then
+    error "--tracy-alloc requires --tracy (it adds heap tracking on top of the base Tracy instrumentation and does nothing without it)."
+fi
+
 resolve_arch_flags
 
 case "${STAGE}" in

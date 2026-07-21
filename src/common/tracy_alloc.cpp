@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <new>
 
+#include "common/profiling.h"
 #include <tracy/Tracy.hpp>
 
 namespace {
