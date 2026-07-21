@@ -774,11 +774,15 @@ stage_setup() {
         "libclang-rt-${CLANG_VERSION}-dev" \
         || warn "Some LLVM packages failed to install."
 
-    # BOLT not in LLVM apt repo for noble — build from source if missing
+    # BOLT is not in the LLVM apt repo for noble. Building it from source
+    # takes ~15-20 min, and only the bolt stage actually needs it —
+    # generate/csgenerate/use/build-elf/propeller never touch BOLT. Don't
+    # force that cost on every setup run — stage_bolt() builds it on
+    # demand, the first time it's actually needed.
     if command -v "llvm-bolt-${CLANG_VERSION}" &>/dev/null; then
-        info "llvm-bolt-${CLANG_VERSION} already installed, skipping."
+        info "llvm-bolt-${CLANG_VERSION} already installed."
     else
-        build_bolt_from_source
+        info "llvm-bolt-${CLANG_VERSION} not found — will be built from source on first use of the bolt stage (~15-20 min, one-time)."
     fi
 
     info "Setting up llvm-mingw cross-compilation toolchain..."
@@ -3317,6 +3321,15 @@ stage_bolt() {
     fi
     resolve_bolt_binaries
     header "Stage 3: BOLT Binary Layout Optimization"
+
+    # BOLT is not in the LLVM apt repo for noble. It's only needed here, in
+    # the bolt stage itself, so build it from source on demand instead of
+    # forcing every `setup` run to pay the ~15-20 min cost.
+    if [[ -z "${LLVM_BOLT}" ]]; then
+        info "llvm-bolt-${CLANG_VERSION} not found — building from source (~15-20 min)..."
+        build_bolt_from_source
+        resolve_bolt_binaries
+    fi
 
     check_tool "${LLVM_BOLT}"; check_tool "${MERGE_FDATA}"
     require_llvm_mingw
