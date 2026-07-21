@@ -377,9 +377,8 @@ _setup_apt() {
     sudo apt-get install -y \
         build-essential cmake ninja-build git pkg-config \
         python3 python3-pip curl wget xz-utils \
-        nasm yasm perl \
+        nasm yasm perl gperf \
         autoconf automake libtool make \
-        glslang-tools \
         patchelf \
         lsb-release software-properties-common gnupg \
         libelf-dev libzstd-dev libudev-dev zstd \
@@ -500,11 +499,11 @@ _setup_pacman() {
     sudo pacman -Syu --needed --noconfirm \
         base-devel cmake ninja git pkgconf \
         python python-pip curl wget \
-        nasm yasm perl \
+        nasm yasm perl gperf \
         autoconf automake libtool make \
-        glslang clang lld llvm zstd \
+        shaderc clang lld llvm zstd \
         patchelf \
-        elfutils libsystemd \
+        elfutils systemd-libs \
         libglvnd libxkbcommon
     # perf is optional and kept out of the required transaction above so a
     # missing/unavailable perf package can never mask a failure in the
@@ -556,11 +555,11 @@ _setup_dnf() {
     sudo dnf install -y \
         gcc gcc-c++ cmake ninja-build git pkg-config \
         python3 python3-pip curl wget xz \
-        nasm yasm perl \
+        nasm yasm perl gperf \
         autoconf automake libtool make \
-        glslang clang lld patchelf \
+        glslc clang lld patchelf \
         elfutils-libelf-devel libudev-devel zstd \
-        libglvnd-devel libglvnd-opengl-devel libxkbcommon-devel
+        libglvnd-devel mesa-libGL-devel libxkbcommon-devel
     # perf is optional and kept out of the required transaction above so a
     # missing/unavailable perf package can never mask a failure in the
     # required compiler/build toolchain (matches the apt path).
@@ -605,11 +604,11 @@ _setup_yum() {
     sudo yum install -y \
         gcc gcc-c++ cmake ninja-build git pkg-config \
         python3 python3-pip curl wget xz \
-        nasm yasm perl \
+        nasm yasm perl gperf \
         autoconf automake libtool make \
-        clang lld patchelf \
+        glslc clang lld patchelf \
         elfutils-libelf-devel libudev-devel zstd \
-        libglvnd-devel libglvnd-opengl-devel libxkbcommon-devel
+        libglvnd-devel mesa-libGL-devel libxkbcommon-devel
     # perf is optional and kept out of the required transaction above so a
     # missing/unavailable perf package can never mask a failure in the
     # required compiler/build toolchain (matches the apt path).
@@ -653,9 +652,9 @@ _setup_zypper() {
     sudo zypper install -y --no-recommends \
         gcc gcc-c++ cmake ninja git pkg-config \
         python3 python3-pip curl wget xz \
-        nasm yasm perl \
+        nasm yasm perl gperf \
         autoconf automake libtool make \
-        glslang clang lld llvm patchelf \
+        shaderc clang lld llvm patchelf \
         libelf-devel libudev-devel zstd \
         Mesa-libGL-devel libglvnd-devel libxkbcommon-devel
     # perf is optional and kept out of the required transaction above so a
@@ -701,11 +700,11 @@ _setup_emerge() {
         dev-lang/python dev-python/pip net-misc/curl net-misc/wget \
         dev-lang/perl \
         dev-lang/nasm dev-lang/yasm \
-        sys-devel/clang sys-devel/lld \
-        dev-build/autoconf dev-build/automake sys-devel/libtool \
-        media-libs/glslang \
-        dev-util/patchelf \
-        dev-libs/elfutils virtual/udev app-arch/zstd \
+        llvm-core/clang llvm-core/lld \
+        dev-build/autoconf dev-build/automake dev-build/libtool \
+        media-libs/shaderc \
+        dev-util/gperf dev-util/patchelf \
+        dev-libs/elfutils virtual/libudev app-arch/zstd \
         media-libs/libglvnd x11-libs/libxkbcommon \
         sys-apps/util-linux 2>/dev/null || true
 
