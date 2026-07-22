@@ -1243,6 +1243,18 @@ void Java_org_citron_citron_1emu_NativeLibrary_removeUpdate(JNIEnv* env, jobject
     auto program_id = EmulationSession::GetProgramId(env, jprogramId);
     ContentManager::RemoveUpdate(EmulationSession::GetInstance().System().GetFileSystemController(),
                                  program_id);
+jboolean Java_org_citron_citron_1emu_NativeLibrary_removeBaseContent(JNIEnv* env, jobject jobj,
+                                                                     jstring jprogramId) {
+    const auto program_id = EmulationSession::GetProgramId(env, jprogramId);
+    return ContentManager::RemoveBaseContent(
+        EmulationSession::GetInstance().System().GetFileSystemController(), program_id);
+}
+
+jboolean Java_org_citron_citron_1emu_NativeLibrary_removeUpdate(JNIEnv* env, jobject jobj,
+                                                                jstring jprogramId) {
+    const auto program_id = EmulationSession::GetProgramId(env, jprogramId);
+    return ContentManager::RemoveUpdate(
+        EmulationSession::GetInstance().System().GetFileSystemController(), program_id);
 }
 
 void Java_org_citron_citron_1emu_NativeLibrary_removeDLC(JNIEnv* env, jobject jobj,
@@ -1250,6 +1262,13 @@ void Java_org_citron_citron_1emu_NativeLibrary_removeDLC(JNIEnv* env, jobject jo
     const auto title_id = EmulationSession::GetProgramId(env, jtitleId);
     ContentManager::RemoveDLC(
         EmulationSession::GetInstance().System().GetFileSystemController(), title_id);
+}
+
+jint Java_org_citron_citron_1emu_NativeLibrary_removeAllDLC(JNIEnv* env, jobject jobj,
+                                                            jstring jprogramId) {
+    const auto program_id = EmulationSession::GetProgramId(env, jprogramId);
+    return static_cast<jint>(
+        ContentManager::RemoveAllDLC(EmulationSession::GetInstance().System(), program_id));
 }
 
 void Java_org_citron_citron_1emu_NativeLibrary_removeMod(JNIEnv* env, jobject jobj, jstring jprogramId,
