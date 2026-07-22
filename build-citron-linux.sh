@@ -379,11 +379,12 @@ _setup_apt() {
         python3 python3-pip curl wget xz-utils \
         nasm yasm perl gperf \
         autoconf automake libtool make \
+        glslang-tools \
         patchelf \
         lsb-release software-properties-common gnupg \
         libelf-dev libzstd-dev libudev-dev zstd \
         libgl-dev libopengl-dev \
-        libxkbcommon-dev
+        libxkbcommon-dev libwayland-dev
     # linux-tools-common/generic are best-effort: the versioned
     # linux-tools-$(uname -r) package frequently doesn't exist on the runner's
     # kernel and is intentionally optional.  Keeping them in a separate call
@@ -504,7 +505,7 @@ _setup_pacman() {
         shaderc clang lld llvm zstd \
         patchelf \
         elfutils systemd-libs \
-        libglvnd libxkbcommon
+        libglvnd libxkbcommon wayland
     # perf is optional and kept out of the required transaction above so a
     # missing/unavailable perf package can never mask a failure in the
     # required compiler/build toolchain (matches the apt path).
@@ -559,7 +560,7 @@ _setup_dnf() {
         autoconf automake libtool make \
         glslc clang lld patchelf \
         elfutils-libelf-devel libudev-devel zstd \
-        libglvnd-devel mesa-libGL-devel libxkbcommon-devel
+        libglvnd-devel mesa-libGL-devel libxkbcommon-devel wayland-devel
     # perf is optional and kept out of the required transaction above so a
     # missing/unavailable perf package can never mask a failure in the
     # required compiler/build toolchain (matches the apt path).
@@ -608,7 +609,7 @@ _setup_yum() {
         autoconf automake libtool make \
         glslc clang lld patchelf \
         elfutils-libelf-devel libudev-devel zstd \
-        libglvnd-devel mesa-libGL-devel libxkbcommon-devel
+        libglvnd-devel mesa-libGL-devel libxkbcommon-devel wayland-devel
     # perf is optional and kept out of the required transaction above so a
     # missing/unavailable perf package can never mask a failure in the
     # required compiler/build toolchain (matches the apt path).
@@ -656,7 +657,7 @@ _setup_zypper() {
         autoconf automake libtool make \
         shaderc clang lld llvm patchelf \
         libelf-devel libudev-devel zstd \
-        Mesa-libGL-devel libglvnd-devel libxkbcommon-devel
+        Mesa-libGL-devel libglvnd-devel libxkbcommon-devel libwayland-client0
     # perf is optional and kept out of the required transaction above so a
     # missing/unavailable perf package can never mask a failure in the
     # required compiler/build toolchain (matches the apt path).
@@ -705,7 +706,7 @@ _setup_emerge() {
         media-libs/shaderc \
         dev-util/gperf dev-util/patchelf \
         dev-libs/elfutils virtual/libudev app-arch/zstd \
-        media-libs/libglvnd x11-libs/libxkbcommon \
+        media-libs/libglvnd x11-libs/libxkbcommon dev-libs/wayland\
         sys-apps/util-linux 2>/dev/null || true
 
     # ── VAAPI + X11 core (all-or-nothing) ───────────────────────────────────
