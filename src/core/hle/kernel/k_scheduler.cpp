@@ -7,6 +7,7 @@
 #include "common/bit_util.h"
 #include "common/fiber.h"
 #include "common/logging.h"
+#include "common/profiling.h"
 #include "core/arm/arm_interface.h"
 #include "core/core.h"
 #include "core/core_timing.h"
@@ -385,6 +386,7 @@ void KScheduler::SwitchThread(KThread* next_thread) {
 }
 
 void KScheduler::ScheduleImpl() {
+    CITRON_PROFILE_SCOPE("KScheduler::ScheduleImpl");
     // First, clear the needs scheduling bool.
     m_state.needs_scheduling.store(false, std::memory_order_relaxed);
     std::atomic_thread_fence(std::memory_order_seq_cst);

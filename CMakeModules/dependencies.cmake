@@ -596,11 +596,11 @@ if (CITRON_ENABLE_TRACY AND NOT TARGET Tracy::TracyClient)
         # unit's *functions* reachable regardless, so the port still opens once the
         # first zone fires.
         "TRACY_DELAYED_INIT ON"
-        # NOTE: TRACY_CALLSTACK is NOT passed here because Tracy's set_option() macro
-        # only supports boolean ON/OFF via CMake option(), which would produce
-        # -DTRACY_CALLSTACK with no value.  Tracy uses TRACY_CALLSTACK as an integer
-        # (callstack depth) in all zone macros.  We set it to 15 via
-        # target_compile_definitions below after CPMAddPackage completes.
+        # NOTE: TRACY_CALLSTACK is deliberately NOT set anywhere for this project,
+        # globally or otherwise. See the comment further below (right after this
+        # OPTIONS list, near the TracyClient PGO/LTO opt-out block) for why: it
+        # would silently upgrade every plain ZoneScoped/CITRON_PROFILE_SCOPE zone
+        # in the whole codebase into a per-call stack walk.
     )
     if (CITRON_ENABLE_LTO)
         list(APPEND _tracy_cpm_options "TRACY_NO_LTO ON")
@@ -630,11 +630,19 @@ if (CITRON_ENABLE_TRACY AND NOT TARGET Tracy::TracyClient)
                 "-fno-cs-profile-generate"
             )
         endif()
-        # Set callstack depth to 15 frames.  Must be done as a direct
-        # target_compile_definitions call with a numeric value because Tracy's
-        # CMakeLists.txt set_option() macro uses option() (boolean only) and
-        # would produce -DTRACY_CALLSTACK with no value if passed via OPTIONS above.
-        target_compile_definitions(TracyClient PUBLIC TRACY_CALLSTACK=15)
+        # NOTE: We deliberately do NOT define a project-wide TRACY_CALLSTACK depth
+        # here. Tracy's ZoneScoped/ZoneScopedN macros (what CITRON_PROFILE_SCOPE
+        # expands to) pass TRACY_CALLSTACK straight through as the callstack-capture
+        # depth on every single call -- if TRACY_CALLSTACK is defined project-wide,
+        # every zone everywhere captures a full stack walk on every invocation
+        # instead of a cheap timestamp, regardless of whether that zone's call site
+        # ever asked for one. For hot zones (Kernel::Svc::Call, KScheduler::
+        # ScheduleImpl, GPU per-command dispatch) this is enormous, unnecessary
+        # overhead. Tracy's header already falls back to TRACY_CALLSTACK=0 (no
+        # capture) when it's undefined, which is what we want as the default.
+        # If callstack capture is genuinely needed for a specific zone, use
+        # ZoneScopedNS(name, depth) / CITRON_PROFILE_SCOPE_CS(name, depth) at that
+        # call site instead of turning it on globally.
         if (NOT TARGET Tracy::TracyClient)
             add_library(Tracy::TracyClient ALIAS TracyClient)
         endif()
