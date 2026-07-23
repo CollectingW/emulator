@@ -1238,11 +1238,6 @@ jint Java_org_citron_citron_1emu_NativeLibrary_addCheat(JNIEnv* env, jobject job
     return static_cast<jint>(Result::Success);
 }
 
-void Java_org_citron_citron_1emu_NativeLibrary_removeUpdate(JNIEnv* env, jobject jobj,
-                                                        jstring jprogramId) {
-    auto program_id = EmulationSession::GetProgramId(env, jprogramId);
-    ContentManager::RemoveUpdate(EmulationSession::GetInstance().System().GetFileSystemController(),
-                                 program_id);
 jboolean Java_org_citron_citron_1emu_NativeLibrary_removeBaseContent(JNIEnv* env, jobject jobj,
                                                                      jstring jprogramId) {
     const auto program_id = EmulationSession::GetProgramId(env, jprogramId);
