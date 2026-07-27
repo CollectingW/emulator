@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -20,6 +21,35 @@ namespace Vulkan {
 class Device;
 class MemoryMap;
 class MemoryAllocation;
+class MemoryAllocator;
+
+/// Scoped registration for a memory-pressure callback.
+/// The registration must not outlive its MemoryAllocator.
+class MemoryPressureCallbackRegistration {
+public:
+    MemoryPressureCallbackRegistration() noexcept = default;
+    ~MemoryPressureCallbackRegistration();
+
+    MemoryPressureCallbackRegistration(MemoryPressureCallbackRegistration&& other) noexcept;
+    MemoryPressureCallbackRegistration& operator=(
+        MemoryPressureCallbackRegistration&& other) noexcept;
+
+    MemoryPressureCallbackRegistration(const MemoryPressureCallbackRegistration&) = delete;
+    MemoryPressureCallbackRegistration& operator=(const MemoryPressureCallbackRegistration&) =
+        delete;
+
+    /// Unregisters the callback and waits for an in-flight invocation to finish.
+    void Reset() noexcept;
+
+private:
+    friend MemoryAllocator;
+
+    explicit MemoryPressureCallbackRegistration(MemoryAllocator& allocator_,
+                                                u64 registration_id_) noexcept;
+
+    MemoryAllocator* allocator{};
+    u64 registration_id{};
+};
 
 /// Hints and requirements for the backing memory type of a commit
 enum class MemoryUsage {
@@ -85,6 +115,7 @@ private:
 /// Allocates and releases memory allocations on demand.
 class MemoryAllocator {
     friend MemoryAllocation;
+    friend MemoryPressureCallbackRegistration;
 
 public:
     /**
@@ -115,12 +146,11 @@ public:
     MemoryCommit Commit(const VkMemoryRequirements& requirements, MemoryUsage usage);
 
     /**
-     * Sets a callback to be called when memory pressure is detected.
-     * This allows external systems (like caches) to free resources.
+     * Registers a callback to be called when memory pressure is detected.
+     * The returned handle disconnects the callback when reset or destroyed.
      */
-    void SetMemoryPressureCallback(std::function<void()> callback) {
-        memory_pressure_callback = std::move(callback);
-    }
+    [[nodiscard]] MemoryPressureCallbackRegistration SetMemoryPressureCallback(
+        std::function<void()> callback);
 
     /// Commits memory required by the buffer and binds it.
     MemoryCommit Commit(const vk::Buffer& buffer, MemoryUsage usage);
@@ -128,6 +158,8 @@ public:
     void NukeAllAllocations();
 
 private:
+    void ClearMemoryPressureCallback(u64 registration_id) noexcept;
+
     /// Attempts to release cached GPU resources after a Vulkan allocation failure.
     bool TryRecoverFromOutOfMemory(VkResult result) const;
 
@@ -154,9 +186,12 @@ private:
     VkDeviceSize buffer_image_granularity; // The granularity for adjacent offsets between buffers
                                            // and optimal images
     u32 valid_memory_types{~0u};
-    std::function<void()>
+    std::shared_ptr<const std::function<void()>>
         memory_pressure_callback; ///< Callback to free resources under memory pressure
+    u64 memory_pressure_callback_registration_id{};
+    mutable bool memory_pressure_callback_running{};
     mutable std::mutex memory_pressure_mutex;
+    mutable std::condition_variable memory_pressure_callback_finished;
 };
 
 } // namespace Vulkan
