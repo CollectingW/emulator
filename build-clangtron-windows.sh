@@ -162,6 +162,8 @@
 #     --release                Release build (default)
 #     --relwithdebinfo         RelWithDebInfo (adds -g, keeps O3/LTO/PGO)
 #     --unity                  Unity builds (~30-90% faster compile, no runtime effect)
+#     --tracy                  Enable Tracy profiler instrumentation (default off)
+#     --tracy-alloc             Enable Tracy heap allocator tracking (default off, requires --tracy)
 #     --clang-version N        Host Clang version (default: 21)
 #     --llvm-mingw-version VER llvm-mingw release tag (default: 20260224)
 #
@@ -219,6 +221,8 @@ JOBS="${JOBS:-$(nproc)}"
 LTO_MODE="${LTO_MODE:-full}"
 PGO_MODE="${PGO_MODE:-ir}"          # ir|fe|none
 UNITY_BUILD="${UNITY_BUILD:-OFF}"   # ENABLE_UNITY_BUILD
+TRACY_BUILD="${TRACY_BUILD:-OFF}"   # CITRON_ENABLE_TRACY
+TRACY_ALLOC_BUILD="${TRACY_ALLOC_BUILD:-OFF}"   # CITRON_ENABLE_TRACY_ALLOC
 BUILD_TYPE="${BUILD_TYPE:-Release}" # Release|RelWithDebInfo
 CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE:-${HOME}/.cache/cpm}"
 CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE/#\~/$HOME}"
@@ -1985,6 +1989,8 @@ build_common_cmake_args() {
         "-DCMAKE_C_FLAGS=${MARCH_NATIVE}"
         "-DCMAKE_CXX_FLAGS=${MARCH_NATIVE}"
     )
+    _CMAKE_ARGS+=("-DCITRON_ENABLE_TRACY=${TRACY_BUILD}")
+    _CMAKE_ARGS+=("-DCITRON_ENABLE_TRACY_ALLOC=${TRACY_ALLOC_BUILD}")
     # Always return 0 — a trailing [[ ]] that evaluates false would trigger set -e in caller.
     :
 }
@@ -4650,6 +4656,35 @@ stage_clangcl() {
     local pgo_link_flags_batch="${pgo_link_flags//%/%%}"
     local pgo_flags_dash_batch="${pgo_flags_dash//%/%%}"
 
+    # NOTE: CITRON_ENABLE_LTO and CITRON_ENABLE_PGO_GENERATE/USE are deliberately left
+    # OFF below, even though this build may genuinely be doing LTO/PGO via the raw
+    # /clang:-flto=... and /clang:-fprofile-instr-... flags already baked into
+    # CMAKE_C/CXX_FLAGS_${config} above. Do NOT "fix" these to reflect real state --
+    # turning them ON activates CMake-native, MSVC-flavored codepaths that fire
+    # whenever MSVC==TRUE (true for clang-cl) and stack incompatible flags on top of
+    # the script's own Clang-native ones:
+    #   - citron_configure_lto() (called from common/core/video_core/shader_recompiler/
+    #     network/audio_core/hid_core/input_common/frontend_common/web_service) sets
+    #     CMake's INTERPROCEDURAL_OPTIMIZATION property, which for an MSVC-ABI compiler
+    #     means CMake injects /GL at compile time and expects /LTCG at link time --
+    #     MSVC's own whole-program-optimization mechanism, not Clang's bitcode LTO.
+    #   - the top-level `if (MSVC) ... add_link_options(/LTCG)` block (CMakeLists.txt)
+    #     fires on the same OR condition.
+    #   - citron_configure_pgo()'s MSVC branch adds /FASTGENPROFILE, /PGD:, and
+    #     /USEPROFILE:PGD= link options -- MSVC's .pgd-based PGO, a completely
+    #     different, incompatible system from Clang's .profraw/.profdata instr-PGO
+    #     the script already sets up via -fprofile-instr-generate/-fprofile-instr-use.
+    #   - PGO.cmake's `if (MSVC) ... add_compile_options(/GL)` block fires too, and is
+    #     not gated by CITRON_PGO_FLAGS_MANAGED_BY_SCRIPT (that guard only wraps the
+    #     GNU/Clang branch, not the MSVC one).
+    # TracyClient's own LTO/PGO opt-out in dependencies.cmake does not depend on these
+    # vars being accurate -- it unconditionally forces INTERPROCEDURAL_OPTIMIZATION
+    # FALSE and appends -fno-lto/-fno-profile-* as target-level compile options on
+    # TracyClient regardless, so Tracy stays correctly isolated either way.
+    local _clangcl_lto_cmake="OFF"
+    local _clangcl_pgo_generate="OFF"
+    local _clangcl_pgo_use="OFF"
+
     cat > "${build_dir}/build-clang-cl.cmd" <<CLANGCL_CMD_EOF
 @echo off
 setlocal
@@ -4679,8 +4714,10 @@ ${sccache_cmake_args}
   -DCLANGCL_OPENSSL_EXTRA_CFLAGS="${pgo_flags_dash_batch}" ^
   -DCLANGCL_FFMPEG_EXTRA_CFLAGS="${pgo_flags_dash_batch}" ^
 ${qt_cmake_line}
-  -DCITRON_ENABLE_LTO=OFF ^
-  -DCITRON_ENABLE_PGO_GENERATE=OFF -DCITRON_ENABLE_PGO_USE=OFF ^
+  -DCITRON_ENABLE_LTO=${_clangcl_lto_cmake} ^
+  -DCITRON_ENABLE_TRACY=${TRACY_BUILD} ^
+  -DCITRON_ENABLE_TRACY_ALLOC=${TRACY_ALLOC_BUILD} ^
+  -DCITRON_ENABLE_PGO_GENERATE=${_clangcl_pgo_generate} -DCITRON_ENABLE_PGO_USE=${_clangcl_pgo_use} ^
   -DCMAKE_C_FLAGS_${config^^}="${config_compile_flags} ${flags_batch}" -DCMAKE_CXX_FLAGS_${config^^}="${config_compile_flags} ${flags_batch}" ^
   -DCMAKE_EXE_LINKER_FLAGS_${config^^}="${config_link_flags}" ^
   -DCITRON_CLANGCL_PGO_COMPILE_FLAGS="${pgo_flags_batch}" -DCITRON_CLANGCL_PGO_LINK_FLAGS="${pgo_link_flags_batch}" ^
@@ -4787,6 +4824,14 @@ while [[ $# -gt 0 ]]; do
             UNITY_BUILD="ON"; shift ;;
         --no-unity)
             UNITY_BUILD="OFF"; shift ;;
+        --tracy)
+            TRACY_BUILD="ON"; shift ;;
+        --no-tracy)
+            TRACY_BUILD="OFF"; shift ;;
+        --tracy-alloc)
+            TRACY_ALLOC_BUILD="ON"; shift ;;
+        --no-tracy-alloc)
+            TRACY_ALLOC_BUILD="OFF"; shift ;;
         --clang-version)
             CLANG_VERSION="$2"
             CLANG="clang-${CLANG_VERSION}"
@@ -4811,6 +4856,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$STAGE" ]] || error "No stage specified. Run with --help for usage."
+
+if [[ "${TRACY_ALLOC_BUILD}" == "ON" && "${TRACY_BUILD}" != "ON" ]]; then
+    error "--tracy-alloc requires --tracy (it adds heap tracking on top of the base Tracy instrumentation and does nothing without it)."
+fi
 
 if [[ "${COMPILER_MODE}" == "clang-cl" ]]; then
     if [[ "${STAGE}" == "setup" ]]; then
