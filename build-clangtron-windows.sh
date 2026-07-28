@@ -2166,7 +2166,7 @@ stage_generate() {
             warn "  Likely causes:"
             warn "    1. Profile runtime not linked: PROFILE_RUNTIME_LIB=${PROFILE_RUNTIME_LIB:-<unset>}"
             warn "    2. PGO generate flag not passed to the linker (PGO_MODE=${PGO_MODE})"
-            warn "    3. citron cmake config overrode CMAKE_EXE_LINKER_FLAGS_RELEASE"
+            warn "    3. citron cmake config overrode CMAKE_EXE_LINKER_FLAGS_${bt_upper}"
             warn ""
             warn "  The binary will still run, but no .profraw will be written."
             warn "  Re-run the generate stage or check the cmake flags above."
@@ -2355,16 +2355,16 @@ stage_csgenerate() {
         "-DCITRON_ENABLE_PGO_GENERATE=ON"
         "-DCITRON_PGO_FLAGS_MANAGED_BY_SCRIPT=ON"
         "-DCITRON_ENABLE_LTO=${generate_lto_cmake}"
-        "-DCMAKE_C_FLAGS_RELEASE=${c_flags}"
-        "-DCMAKE_CXX_FLAGS_RELEASE=${cxx_flags}"
-        "-DCMAKE_EXE_LINKER_FLAGS_RELEASE=${c_flags} ${PROFILE_RUNTIME_LIB:+${PROFILE_RUNTIME_LIB}} ${extra_link_flags} ${linker_debug_flag}"
+        "-DCMAKE_C_FLAGS_${bt_upper}=${c_flags}"
+        "-DCMAKE_CXX_FLAGS_${bt_upper}=${cxx_flags}"
+        "-DCMAKE_EXE_LINKER_FLAGS_${bt_upper}=${c_flags} ${PROFILE_RUNTIME_LIB:+${PROFILE_RUNTIME_LIB}} ${extra_link_flags} ${linker_debug_flag}"
         "-DCITRON_PGO_PROFILE_DIR=${PROFILE_DIR}"
     )
     cmake "${SOURCE_DIR}" "${_CMAKE_ARGS[@]}" \
         || error "CMake configure failed"
 
-    info "Building CS-IRPGO instrumented citron..."
-    cmake --build . --config Release -j "${JOBS}"
+    info "Building CS-IRPGO instrumented citron (${BUILD_TYPE})..."
+    cmake --build . --config "${BUILD_TYPE}" -j "${JOBS}"
 
     success "CS-IRPGO instrumented build complete: ${BUILD_CSGENERATE}/bin/citron.exe"
 
