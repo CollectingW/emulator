@@ -31,9 +31,12 @@ class AddonAdapter(val addonViewModel: AddonViewModel) :
             binding.addonCheckbox.setOnCheckedChangeListener { _, checked ->
                 model.enabled = checked
             }
-            binding.buttonDelete.visibility = View.VISIBLE
-            binding.buttonDelete.setOnClickListener {
-                addonViewModel.setAddonToDelete(model)
+            binding.buttonDelete.visibility = if (model.removable) View.VISIBLE else View.GONE
+            binding.buttonDelete.setOnClickListener(null)
+            if (model.removable) {
+                binding.buttonDelete.setOnClickListener {
+                    addonViewModel.setAddonToDelete(model)
+                }
             }
         }
     }

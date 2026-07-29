@@ -143,7 +143,8 @@ NvResult nvhost_nvdec_common::MapBuffer(IoctlMapBuffer& params, std::span<MapBuf
     for (size_t i = 0; i < num_entries; i++) {
         DAddr pin_address = nvmap.PinHandle(entries[i].map_handle, true);
         if (!pin_address) {
-            LOG_ERROR(Service_NVDRV, "Failed to pin handle {}: SMMU address space exhausted", entries[i].map_handle);
+            LOG_ERROR(Service_NVDRV, "Failed to pin handle {}: SMMU address space exhausted",
+                      entries[i].map_handle);
             return NvResult::InsufficientMemory;
         }
         entries[i].map_address = static_cast<u32>(pin_address);

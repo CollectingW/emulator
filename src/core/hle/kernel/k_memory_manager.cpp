@@ -431,6 +431,106 @@ Result KMemoryManager::AllocateForProcess(KPageGroup* out, size_t num_pages, u32
     R_SUCCEED();
 }
 
+void KMemoryManager::PrepareForProcess(KPhysicalAddress address, size_t num_pages, Pool pool,
+                                       u64 process_id, u8 fill_pattern) {
+    const size_t pool_index = static_cast<size_t>(pool);
+    bool has_optimized_process;
+    u64 optimized_process_id;
+    {
+        KScopedLightLock lk(m_pool_locks[pool_index]);
+        has_optimized_process = m_has_optimized_process[pool_index];
+        optimized_process_id = m_optimized_process_ids[pool_index];
+    }
+    const bool optimized = has_optimized_process && optimized_process_id == process_id;
+
+    while (num_pages > 0) {
+        auto& manager = this->GetManager(address);
+        const size_t cur_pages = std::min(num_pages, manager.GetPageOffsetToEnd(address));
+
+        if (optimized) {
+            const bool any_new = manager.ProcessOptimizedAllocation(
+                m_system.Kernel(), address, cur_pages, fill_pattern);
+            if (any_new) {
+                KScopedLightLock lk(m_pool_locks[static_cast<size_t>(manager.GetPool())]);
+                manager.TrackOptimizedAllocation(m_system.Kernel(), address, cur_pages);
+            }
+        } else {
+            if (has_optimized_process) {
+                KScopedLightLock lk(m_pool_locks[pool_index]);
+                manager.TrackUnoptimizedAllocation(m_system.Kernel(), address, cur_pages);
+            }
+            m_system.DeviceMemory().buffer.ClearBackingRegion(
+                GetInteger(address) - Core::DramMemoryMap::Base, cur_pages * PageSize,
+                fill_pattern);
+        }
+
+        address += cur_pages * PageSize;
+        num_pages -= cur_pages;
+    }
+}
+
+Result KMemoryManager::AllocateForProcessContinuous(KPageGroup* out,
+                                                    KPhysicalAddress* out_tail_address,
+                                                    size_t* out_tail_pages, size_t num_pages,
+                                                    size_t reserve_pages, u32 option,
+                                                    u64 process_id, u8 fill_pattern) {
+    ASSERT(out != nullptr && out->GetNumPages() == 0);
+    ASSERT(out_tail_address != nullptr && out_tail_pages != nullptr);
+    ASSERT(num_pages > 0 && reserve_pages >= num_pages);
+
+    *out_tail_address = 0;
+    *out_tail_pages = 0;
+    const auto [pool, dir] = DecodeOption(option);
+    KPhysicalAddress block = 0;
+    {
+        KScopedLightLock lk(m_pool_locks[static_cast<size_t>(pool)]);
+        const s32 heap_index = KPageHeap::GetAlignedBlockIndex(reserve_pages, 1);
+        for (Impl* manager = this->GetFirstManager(pool, dir); manager != nullptr;
+             manager = this->GetNextManager(manager, dir)) {
+            block = manager->AllocateAligned(heap_index, reserve_pages, 1);
+            if (block != 0) {
+                break;
+            }
+        }
+    }
+    R_UNLESS(block != 0, ResultOutOfMemory);
+
+    const Result add_result = out->AddBlock(block, num_pages);
+    if (add_result.IsError()) {
+        this->ReleaseContinuous(block, reserve_pages);
+        R_RETURN(add_result);
+    }
+
+    this->PrepareForProcess(block, num_pages, pool, process_id, fill_pattern);
+    *out_tail_address = block + num_pages * PageSize;
+    *out_tail_pages = reserve_pages - num_pages;
+    R_SUCCEED();
+}
+
+void KMemoryManager::ReleaseContinuous(KPhysicalAddress address, size_t num_pages) {
+    while (num_pages > 0) {
+        auto& manager = this->GetManager(address);
+        const size_t cur_pages = std::min(num_pages, manager.GetPageOffsetToEnd(address));
+        {
+            KScopedLightLock lk(m_pool_locks[static_cast<size_t>(manager.GetPool())]);
+            manager.Free(address, cur_pages);
+        }
+        address += cur_pages * PageSize;
+        num_pages -= cur_pages;
+    }
+}
+
+Result KMemoryManager::ConsumeForProcess(KPageGroup* out, KPhysicalAddress address,
+                                         size_t num_pages, u32 option, u64 process_id,
+                                         u8 fill_pattern) {
+    ASSERT(out != nullptr && out->GetNumPages() == 0);
+    const auto [pool, dir] = DecodeOption(option);
+    static_cast<void>(dir);
+    R_TRY(out->AddBlock(address, num_pages));
+    this->PrepareForProcess(address, num_pages, pool, process_id, fill_pattern);
+    R_SUCCEED();
+}
+
 size_t KMemoryManager::Impl::Initialize(KPhysicalAddress address, size_t size,
                                         KVirtualAddress management, KVirtualAddress management_end,
                                         Pool p) {

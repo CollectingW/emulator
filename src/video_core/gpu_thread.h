@@ -72,9 +72,12 @@ struct FlushAndInvalidateRegionCommand final {
 /// Command to make the gpu look into pending requests
 struct GPUTickCommand final {};
 
+/// Queue barrier used to wait for commands submitted before it.
+struct SynchronizeCommand final {};
+
 using CommandData =
     std::variant<std::monostate, SubmitListCommand, FlushRegionCommand, InvalidateRegionCommand,
-                 FlushAndInvalidateRegionCommand, GPUTickCommand>;
+                 FlushAndInvalidateRegionCommand, GPUTickCommand, SynchronizeCommand>;
 
 struct CommandDataContainer {
     CommandDataContainer() = default;
@@ -120,6 +123,9 @@ public:
     void FlushAndInvalidateRegion(DAddr addr, u64 size);
 
     void TickGPU();
+
+    /// Wait until all commands queued before this call have been processed by the GPU thread.
+    void Synchronize();
 
 private:
     /// Pushes a command to be executed by the GPU thread

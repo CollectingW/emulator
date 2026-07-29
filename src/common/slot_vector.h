@@ -110,9 +110,21 @@ public:
     }
 
     template <typename... Args>
-    [[nodiscard]] SlotId insert(Args&&... args) noexcept {
+    [[nodiscard]] SlotId insert(Args&&... args) noexcept(
+        std::is_nothrow_constructible_v<T, Args...>) {
         const u32 index = FreeValueIndex();
-        new (&values[index].object) T(std::forward<Args>(args)...);
+        if constexpr (std::is_nothrow_constructible_v<T, Args...>) {
+            new (&values[index].object) T(std::forward<Args>(args)...);
+        } else {
+            try {
+                new (&values[index].object) T(std::forward<Args>(args)...);
+            } catch (...) {
+                // FreeValueIndex removes the slot before construction. Restore it if construction
+                // fails so a recoverable allocation exception does not permanently leak the slot.
+                free_list.push_back(index);
+                throw;
+            }
+        }
         SetStorageBit(index);
 
         return SlotId{index};

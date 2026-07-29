@@ -100,7 +100,11 @@ public:
     }
 
     [[nodiscard]] bool IsBuilt() const noexcept {
-        return is_built.load(std::memory_order::relaxed);
+        return is_built.load(std::memory_order::acquire);
+    }
+
+    [[nodiscard]] bool IsFailed() const noexcept {
+        return build_failed.load(std::memory_order::acquire);
     }
 
     template <typename Spec>
@@ -174,6 +178,7 @@ private:
     std::condition_variable build_condvar;
     std::mutex build_mutex;
     std::atomic_bool is_built{false};
+    std::atomic_bool build_failed{false};
     bool uses_push_descriptor{false};
     bool split_descriptor_sets{false};
 };

@@ -3,10 +3,14 @@
 
 #pragma once
 
+#include <optional>
+
 #include "common/common_types.h"
 #include "shader_recompiler/frontend/maxwell/opcodes.h"
 
 namespace Shader::Maxwell {
+
+[[nodiscard]] std::optional<Opcode> TryDecode(u64 insn);
 
 [[nodiscard]] Opcode Decode(u64 insn);
 

@@ -170,11 +170,10 @@ class GamesFragment : Fragment() {
             val spacingNavigation = resources.getDimensionPixelSize(R.dimen.spacing_navigation)
             val spacingNavigationRail =
                 resources.getDimensionPixelSize(R.dimen.spacing_navigation_rail)
-            val bottomSpacing = maxOf(spacingNavigation, spacingNavigationRail)
 
             binding.gridGames.updatePadding(
                 top = barInsets.top + extraListSpacing,
-                bottom = barInsets.bottom + bottomSpacing + extraListSpacing
+                bottom = barInsets.bottom + spacingNavigation + extraListSpacing
             )
 
             binding.swipeRefresh.setProgressViewEndTarget(
@@ -184,11 +183,10 @@ class GamesFragment : Fragment() {
 
             val leftInsets = barInsets.left + cutoutInsets.left
             val rightInsets = barInsets.right + cutoutInsets.right
-            val railInset = if (viewMode == VIEW_MODE_LIST) spacingNavigationRail else 0
             val left = leftInsets +
-                if (view.layoutDirection == View.LAYOUT_DIRECTION_LTR) railInset else 0
+                if (view.layoutDirection == View.LAYOUT_DIRECTION_LTR) spacingNavigationRail else 0
             val right = rightInsets +
-                if (view.layoutDirection == View.LAYOUT_DIRECTION_RTL) railInset else 0
+                if (view.layoutDirection == View.LAYOUT_DIRECTION_RTL) spacingNavigationRail else 0
             binding.swipeRefresh.updateMargins(left = left, right = right)
 
             binding.scanProgress.updateMargins(

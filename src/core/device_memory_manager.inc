@@ -215,14 +215,21 @@ void DeviceMemoryManager<Traits>::Map(DAddr address, VAddr virtual_address, size
     size_t start_page_d = address >> Memory::CITRON_PAGEBITS;
     size_t num_pages = Common::AlignUp(size, Memory::CITRON_PAGESIZE) >> Memory::CITRON_PAGEBITS;
     std::scoped_lock lk(mapping_guard);
+    size_t missing_pages = 0;
+    size_t first_missing_page = 0;
     for (size_t i = 0; i < num_pages; i++) {
         const VAddr new_vaddress = virtual_address + i * Memory::CITRON_PAGESIZE;
         auto* ptr = process_memory->GetPointerSilent(Common::ProcessAddress(new_vaddress));
         if (ptr == nullptr) [[unlikely]] {
             entries[start_page_d + i].compressed_physical_ptr = 0;
+            if (missing_pages == 0) {
+                first_missing_page = i;
+            }
+            ++missing_pages;
             continue;
         }
-        auto phys_addr = static_cast<u32>(GetRawPhysicalAddr(ptr) >> Memory::CITRON_PAGEBITS) + 1U;
+        auto phys_addr =
+            static_cast<u32>(GetRawPhysicalAddr(ptr) >> Memory::CITRON_PAGEBITS) + 1U;
         entries[start_page_d + i].compressed_physical_ptr = phys_addr;
         InsertCPUBacking(start_page_d + i, new_vaddress, asid);
         const u32 base_dev = compressed_device_addr[phys_addr - 1U];
@@ -237,6 +244,21 @@ void DeviceMemoryManager<Traits>::Map(DAddr address, VAddr virtual_address, size
             compressed_device_addr[phys_addr - 1U] = MULTI_FLAG | start_id;
         }
         impl->multi_dev_address.Register(new_dev, start_id);
+    }
+    if (missing_pages != 0) {
+        static std::atomic<u64> partial_map_count{0};
+        const u64 count = partial_map_count.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (count <= 8 || (count % 256) == 0) {
+            LOG_WARNING(HW_Memory,
+                        "Partial device map contains unbacked CPU pages (left unmapped): "
+                        "d_address=0x{:016X} v_address=0x{:016X} size={} "
+                        "first_missing_d=0x{:016X} first_missing_v=0x{:016X} "
+                        "first_missing_page={} missing_pages={} asid={} sample_count={}",
+                        address, virtual_address, size,
+                        address + first_missing_page * Memory::CITRON_PAGESIZE,
+                        virtual_address + first_missing_page * Memory::CITRON_PAGESIZE,
+                        first_missing_page, missing_pages, asid.id, count);
+        }
     }
     if (track) {
         TrackContinuityImpl(address, virtual_address, size, asid);
@@ -457,17 +479,30 @@ void DeviceMemoryManager<Traits>::WriteBlock(DAddr address, const void* src_poin
 }
 
 template <typename Traits>
-void DeviceMemoryManager<Traits>::ReadBlockUnsafe(DAddr address, void* dest_pointer, size_t size) {
+DeviceMemoryReadResult DeviceMemoryManager<Traits>::ReadBlockUnsafe(
+    DAddr address, void* dest_pointer, size_t size,
+    [[maybe_unused]] std::string_view call_site, bool report_unmapped) {
     static std::atomic<u64> unmapped_read_unsafe_count{0};
+    DeviceMemoryReadResult result;
     WalkBlock(
         address, size,
         [&](size_t copy_amount, DAddr current_vaddr) {
-            const u64 count = unmapped_read_unsafe_count.fetch_add(1, std::memory_order_relaxed);
-            if (count < 5 || (count % 100 == 0)) {
-                LOG_ERROR(HW_Memory,
-                          "Unmapped Device ReadBlockUnsafe @ 0x{:016X} (start = 0x{:016X}, size = "
-                          "{}) [total: {}]. Try disabling async GPU emulation if crashes.",
-                          current_vaddr, address, size, count + 1);
+            if (result.fully_mapped) {
+                result.first_unmapped_address = current_vaddr;
+            }
+            result.fully_mapped = false;
+            result.unmapped_bytes += copy_amount;
+            if (report_unmapped) {
+                const u64 count =
+                    unmapped_read_unsafe_count.fetch_add(1, std::memory_order_relaxed);
+                if (count < 5 || (count % 100 == 0)) {
+                    LOG_ERROR(
+                        HW_Memory,
+                        "Unmapped Device ReadBlockUnsafe @ 0x{:016X} (start = 0x{:016X}, size = "
+                        "{}) [total: {}, call_site={}]. Try disabling async GPU emulation if "
+                        "crashes.",
+                        current_vaddr, address, size, count + 1, call_site);
+                }
             }
             std::memset(dest_pointer, 0, copy_amount);
         },
@@ -477,6 +512,7 @@ void DeviceMemoryManager<Traits>::ReadBlockUnsafe(DAddr address, void* dest_poin
         [&](const std::size_t copy_amount) {
             dest_pointer = static_cast<u8*>(dest_pointer) + copy_amount;
         });
+    return result;
 }
 
 template <typename Traits>

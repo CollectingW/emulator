@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <codecvt>
+#include <filesystem>
 #include <locale>
 #include <string>
 #include <string_view>
@@ -11,6 +12,7 @@
 #include <functional>
 #include <iterator>
 #include <limits>
+#include <mutex>
 
 #ifdef ARCHITECTURE_arm64
 #include <adrenotools/driver.h>
@@ -18,6 +20,7 @@
 
 #include <android/api-level.h>
 #include <android/native_window_jni.h>
+#include <common/fs/file.h>
 #include <common/fs/fs.h>
 #include <core/file_sys/patch_manager.h>
 #include <core/file_sys/savedata_factory.h>
@@ -147,6 +150,7 @@ EmulationSession::EmulationSession() {
 }
 
 EmulationSession::~EmulationSession() {
+    SetNativeWindow(nullptr);
     if (m_network_initialized) {
         m_system.GetRoomNetwork().Shutdown();
     }
@@ -180,11 +184,19 @@ EmuWindow_Android& EmulationSession::Window() {
     return *m_window;
 }
 
-ANativeWindow* EmulationSession::NativeWindow() const {
-    return m_native_window;
-}
-
 void EmulationSession::SetNativeWindow(ANativeWindow* native_window) {
+    std::scoped_lock lock(m_window_mutex);
+    if (m_native_window == native_window) {
+        // ANativeWindow_fromSurface acquires a reference even when it returns the same pointer.
+        // Keep the reference already owned by the session and release the duplicate.
+        if (native_window != nullptr) {
+            ANativeWindow_release(native_window);
+        }
+        return;
+    }
+    if (m_native_window != nullptr) {
+        ANativeWindow_release(m_native_window);
+    }
     m_native_window = native_window;
 }
 
@@ -228,8 +240,16 @@ bool EmulationSession::IsPaused() const {
     return m_is_running && m_is_paused;
 }
 
+bool EmulationSession::IsShuttingDown() const {
+    return m_is_shutting_down;
+}
+
 bool EmulationSession::IsNetworkInitialized() const {
     return m_network_initialized;
+}
+
+std::unique_lock<std::mutex> EmulationSession::AcquireSessionLock() {
+    return std::unique_lock{m_mutex};
 }
 
 const Core::PerfStatsResults& EmulationSession::PerfStats() {
@@ -238,7 +258,8 @@ const Core::PerfStatsResults& EmulationSession::PerfStats() {
 }
 
 void EmulationSession::SurfaceChanged() {
-    if (!IsRunning()) {
+    std::scoped_lock lock(m_window_mutex);
+    if (!IsRunning() || m_window == nullptr || m_native_window == nullptr) {
         return;
     }
     m_window->OnSurfaceChanged(m_native_window);
@@ -374,10 +395,15 @@ void EmulationSession::SetAppletId(int applet_id) {
 Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string& filepath,
                                                                const std::size_t program_index,
                                                                const bool frontend_initiated) {
-    std::scoped_lock lock(m_mutex);
+    std::unique_lock lock(m_mutex);
+    m_session_cv.wait(lock, [this] { return !m_session_active; });
+    m_session_active = true;
 
     // Create the render window.
-    m_window = std::make_unique<EmuWindow_Android>(m_native_window, m_vulkan_library);
+    {
+        std::scoped_lock window_lock(m_window_mutex);
+        m_window = std::make_unique<EmuWindow_Android>(m_native_window, m_vulkan_library);
+    }
 
     // Initialize system.
     jauto android_keyboard = std::make_unique<Common::Android::SoftwareKeyboard::AndroidKeyboard>();
@@ -430,7 +456,13 @@ Core::SystemResultStatus EmulationSession::InitializeEmulation(const std::string
 }
 
 void EmulationSession::ShutdownEmulation() {
+    m_is_shutting_down = true;
     std::scoped_lock lock(m_mutex);
+    SCOPE_EXIT {
+        m_session_active = false;
+        m_is_shutting_down = false;
+        m_session_cv.notify_all();
+    };
 
     if (m_next_program_index != -1) {
         ChangeProgram(m_next_program_index);
@@ -438,6 +470,7 @@ void EmulationSession::ShutdownEmulation() {
     }
 
     m_is_running = false;
+    m_is_paused = false;
 
     // Unload user input.
     m_system.HIDCore().UnloadInputDevices();
@@ -451,13 +484,19 @@ void EmulationSession::ShutdownEmulation() {
         m_system.ShutdownMainProcess();
         m_detached_tasks.WaitForAllTasks();
         m_load_result = Core::SystemResultStatus::ErrorNotInitialized;
-        m_window.reset();
+        {
+            std::scoped_lock window_lock(m_window_mutex);
+            m_window.reset();
+        }
         OnEmulationStopped(Core::SystemResultStatus::Success);
         return;
     }
 
     // Tear down the render window.
-    m_window.reset();
+    {
+        std::scoped_lock window_lock(m_window_mutex);
+        m_window.reset();
+    }
 }
 
 void EmulationSession::PauseEmulation() {
@@ -474,6 +513,7 @@ void EmulationSession::UnPauseEmulation() {
 
 void EmulationSession::HaltEmulation() {
     std::scoped_lock lock(m_mutex);
+    m_is_shutting_down = true;
     m_is_running = false;
     m_cv.notify_one();
 }
@@ -481,6 +521,7 @@ void EmulationSession::HaltEmulation() {
 void EmulationSession::RunEmulation() {
     {
         std::scoped_lock lock(m_mutex);
+        m_is_paused = false;
         m_is_running = true;
     }
 
@@ -585,7 +626,6 @@ void Java_org_citron_citron_1emu_NativeLibrary_surfaceChanged(JNIEnv* env, jobje
 }
 
 void Java_org_citron_citron_1emu_NativeLibrary_surfaceDestroyed(JNIEnv* env, jobject instance) {
-    ANativeWindow_release(EmulationSession::GetInstance().NativeWindow());
     EmulationSession::GetInstance().SetNativeWindow(nullptr);
     EmulationSession::GetInstance().SurfaceChanged();
 }
@@ -666,7 +706,7 @@ jboolean JNICALL Java_org_citron_citron_1emu_utils_GpuDriverHelper_supportsCusto
 #endif
 }
 
-jobjectArray Java_org_citron_citron_1emu_utils_GpuDriverHelper_getSystemDriverInfo(
+jobjectArray Java_org_citron_citron_1emu_utils_GpuDriverHelper_getSystemDriverInfoNative(
     JNIEnv* env, jobject j_obj, jobject j_surf, jstring j_hook_lib_dir) {
     const char* file_redirect_dir_{};
     int featureFlags{};
@@ -674,9 +714,13 @@ jobjectArray Java_org_citron_citron_1emu_utils_GpuDriverHelper_getSystemDriverIn
     auto handle = adrenotools_open_libvulkan(RTLD_NOW, featureFlags, nullptr, hook_lib_dir.c_str(),
                                              nullptr, nullptr, file_redirect_dir_, nullptr);
     auto driver_library = std::make_shared<Common::DynamicLibrary>(handle);
-    InputCommon::InputSubsystem input_subsystem;
-    auto window =
-        std::make_unique<EmuWindow_Android>(ANativeWindow_fromSurface(env, j_surf), driver_library);
+    ANativeWindow* const native_window = ANativeWindow_fromSurface(env, j_surf);
+    SCOPE_EXIT {
+        if (native_window != nullptr) {
+            ANativeWindow_release(native_window);
+        }
+    };
+    auto window = std::make_unique<EmuWindow_Android>(native_window, driver_library);
 
     Vulkan::vk::InstanceDispatch dld;
     Vulkan::vk::Instance vk_instance = Vulkan::CreateInstance(
@@ -724,7 +768,8 @@ void Java_org_citron_citron_1emu_NativeLibrary_stopEmulation(JNIEnv* env, jclass
 }
 
 jboolean Java_org_citron_citron_1emu_NativeLibrary_isRunning(JNIEnv* env, jclass clazz) {
-    return static_cast<jboolean>(EmulationSession::GetInstance().IsRunning());
+    const auto& session = EmulationSession::GetInstance();
+    return static_cast<jboolean>(session.IsRunning() || session.IsShuttingDown());
 }
 
 jboolean Java_org_citron_citron_1emu_NativeLibrary_isPaused(JNIEnv* env, jclass clazz) {
@@ -964,7 +1009,7 @@ jobjectArray Java_org_citron_citron_1emu_NativeLibrary_getPatchesForFile(JNIEnv*
             Common::Android::ToJString(env, patch.name),
             Common::Android::ToJString(env, patch.version), static_cast<jint>(patch.type),
             Common::Android::ToJString(env, std::to_string(patch.program_id)),
-            Common::Android::ToJString(env, std::to_string(patch.title_id)));
+            Common::Android::ToJString(env, std::to_string(patch.title_id)), patch.removable);
         env->SetObjectArrayElement(jpatchArray, i, jpatch);
         ++i;
     }
@@ -1004,7 +1049,7 @@ jobjectArray Java_org_citron_citron_1emu_NativeLibrary_getCheatsForFile(JNIEnv* 
         jobject jpatch = env->NewObject(
             Common::Android::GetPatchClass(), Common::Android::GetPatchConstructor(), cheat.enabled,
             jname, jversion, static_cast<jint>(FileSys::PatchType::Cheat), jpatchProgramId,
-            jbuildId);
+            jbuildId, false);
         env->SetObjectArrayElement(jpatchArray, i, jpatch);
         env->DeleteLocalRef(jpatch);
         env->DeleteLocalRef(jname);
@@ -1072,17 +1117,153 @@ jboolean Java_org_citron_citron_1emu_NativeLibrary_reloadCheats(JNIEnv* env, job
     return true;
 }
 
-void Java_org_citron_citron_1emu_NativeLibrary_removeUpdate(JNIEnv* env, jobject jobj,
-                                                        jstring jprogramId) {
-    auto program_id = EmulationSession::GetProgramId(env, jprogramId);
-    ContentManager::RemoveUpdate(EmulationSession::GetInstance().System().GetFileSystemController(),
-                                 program_id);
+jint Java_org_citron_citron_1emu_NativeLibrary_addCheat(JNIEnv* env, jobject jobj,
+                                                     jstring jprogramId, jstring jtitle,
+                                                     jstring jcode) {
+    enum class Result : jint {
+        Success = 0,
+        InvalidTitle = 1,
+        InvalidCode = 2,
+        NoCheatEngine = 3,
+        UnableToWrite = 4,
+        DuplicateTitle = 5,
+    };
+
+    constexpr std::size_t MaxCheatFileSize = 1024 * 1024;
+    constexpr std::string_view HotCheatsDirectory = "Hot Cheats";
+
+    auto& session = EmulationSession::GetInstance();
+    const auto session_lock = session.AcquireSessionLock();
+    auto& system = session.System();
+    auto* cheat_engine = system.GetCheatEngine();
+    if (cheat_engine == nullptr) {
+        return static_cast<jint>(Result::NoCheatEngine);
+    }
+
+    const auto program_id = EmulationSession::GetProgramId(env, jprogramId);
+    const auto title = Common::StripSpaces(Common::Android::GetJString(env, jtitle));
+    const auto code = Common::StripSpaces(Common::Android::GetJString(env, jcode));
+    if (program_id == 0 || title.empty() ||
+        title.size() >= Core::Memory::CheatDefinition{}.readable_name.size() ||
+        title.find_first_of("[]{}\r\n") != std::string::npos) {
+        return static_cast<jint>(Result::InvalidTitle);
+    }
+
+    const auto entry_text = fmt::format("[{}]\n{}\n", title, code);
+    const Core::Memory::TextCheatParser parser;
+    const auto new_entries = parser.Parse(entry_text);
+    if (new_entries.size() != 2 || new_entries[1].definition.num_opcodes == 0) {
+        return static_cast<jint>(Result::InvalidCode);
+    }
+
+    const auto build_id = FileSys::GetCheatBuildId(cheat_engine->GetBuildId());
+    const auto cheat_file =
+        Common::FS::GetCitronPath(Common::FS::CitronPath::LoadDir) /
+        fmt::format("{:016X}", program_id) / HotCheatsDirectory / "cheats" /
+        fmt::format("{}.txt", build_id);
+    static std::mutex add_cheat_mutex;
+    const std::scoped_lock add_cheat_lock{add_cheat_mutex};
+    if (!Common::FS::CreateParentDirs(cheat_file)) {
+        return static_cast<jint>(Result::UnableToWrite);
+    }
+
+    std::string contents;
+    if (Common::FS::Exists(cheat_file)) {
+        const auto file_size = Common::FS::GetSize(cheat_file);
+        if (file_size > MaxCheatFileSize) {
+            return static_cast<jint>(Result::UnableToWrite);
+        }
+        contents =
+            Common::FS::ReadStringFromFile(cheat_file, Common::FS::FileType::TextFile);
+        if (contents.size() != file_size) {
+            return static_cast<jint>(Result::UnableToWrite);
+        }
+
+        const auto current_entries = parser.Parse(contents);
+        if (current_entries.empty()) {
+            return static_cast<jint>(Result::UnableToWrite);
+        }
+        const auto has_duplicate = std::any_of(
+            current_entries.cbegin(), current_entries.cend(), [&title](const auto& entry) {
+                const auto& name = entry.definition.readable_name;
+                const auto end = std::find(name.cbegin(), name.cend(), '\0');
+                return std::string_view{name.data(),
+                                        static_cast<std::size_t>(end - name.cbegin())} == title;
+            });
+        if (has_duplicate) {
+            return static_cast<jint>(Result::DuplicateTitle);
+        }
+    }
+
+    if (!contents.empty() && contents.back() != '\n') {
+        contents.push_back('\n');
+    }
+    contents += entry_text;
+    if (contents.size() > MaxCheatFileSize || parser.Parse(contents).empty()) {
+        return static_cast<jint>(Result::UnableToWrite);
+    }
+
+    auto temporary_file = cheat_file;
+    temporary_file += ".tmp";
+    if (!Common::FS::RemoveFile(temporary_file)) {
+        return static_cast<jint>(Result::UnableToWrite);
+    }
+    SCOPE_EXIT {
+        void(Common::FS::RemoveFile(temporary_file));
+    };
+    if (Common::FS::WriteStringToFile(temporary_file, Common::FS::FileType::TextFile, contents) !=
+        contents.size()) {
+        return static_cast<jint>(Result::UnableToWrite);
+    }
+
+    std::error_code rename_error;
+    std::filesystem::rename(temporary_file, cheat_file, rename_error);
+    if (rename_error) {
+        return static_cast<jint>(Result::UnableToWrite);
+    }
+
+    auto& disabled_addons = Settings::values.disabled_addons[program_id];
+    std::erase(disabled_addons, HotCheatsDirectory);
+    auto& disabled_cheats = Settings::values.disabled_cheats[build_id];
+    const auto source = fmt::format("{}/{}.txt", HotCheatsDirectory, build_id);
+    disabled_cheats.erase(FileSys::GetCheatConfigKey(source, title));
+    disabled_cheats.erase(title);
+    if (disabled_cheats.empty()) {
+        Settings::values.disabled_cheats.erase(build_id);
+    }
+
+    const FileSys::PatchManager pm{program_id, system.GetFileSystemController(),
+                                   system.GetContentProvider()};
+    cheat_engine->Reload(pm.CreateCheatList(cheat_engine->GetBuildId()));
+    return static_cast<jint>(Result::Success);
+}
+
+jboolean Java_org_citron_citron_1emu_NativeLibrary_removeBaseContent(JNIEnv* env, jobject jobj,
+                                                                     jstring jprogramId) {
+    const auto program_id = EmulationSession::GetProgramId(env, jprogramId);
+    return ContentManager::RemoveBaseContent(
+        EmulationSession::GetInstance().System().GetFileSystemController(), program_id);
+}
+
+jboolean Java_org_citron_citron_1emu_NativeLibrary_removeUpdate(JNIEnv* env, jobject jobj,
+                                                                jstring jprogramId) {
+    const auto program_id = EmulationSession::GetProgramId(env, jprogramId);
+    return ContentManager::RemoveUpdate(
+        EmulationSession::GetInstance().System().GetFileSystemController(), program_id);
 }
 
 void Java_org_citron_citron_1emu_NativeLibrary_removeDLC(JNIEnv* env, jobject jobj,
-                                                     jstring jprogramId) {
-    auto program_id = EmulationSession::GetProgramId(env, jprogramId);
-    ContentManager::RemoveAllDLC(EmulationSession::GetInstance().System(), program_id);
+                                                     jstring jtitleId) {
+    const auto title_id = EmulationSession::GetProgramId(env, jtitleId);
+    ContentManager::RemoveDLC(
+        EmulationSession::GetInstance().System().GetFileSystemController(), title_id);
+}
+
+jint Java_org_citron_citron_1emu_NativeLibrary_removeAllDLC(JNIEnv* env, jobject jobj,
+                                                            jstring jprogramId) {
+    const auto program_id = EmulationSession::GetProgramId(env, jprogramId);
+    return static_cast<jint>(
+        ContentManager::RemoveAllDLC(EmulationSession::GetInstance().System(), program_id));
 }
 
 void Java_org_citron_citron_1emu_NativeLibrary_removeMod(JNIEnv* env, jobject jobj, jstring jprogramId,

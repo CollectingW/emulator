@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <vector>
 #include "common/common_types.h"
@@ -127,6 +128,9 @@ public:
     void NukeAllAllocations();
 
 private:
+    /// Attempts to release cached GPU resources after a Vulkan allocation failure.
+    bool TryRecoverFromOutOfMemory(VkResult result) const;
+
     /// Tries to allocate a chunk of memory.
     bool TryAllocMemory(VkMemoryPropertyFlags flags, u32 type_mask, u64 size);
 
@@ -150,7 +154,9 @@ private:
     VkDeviceSize buffer_image_granularity; // The granularity for adjacent offsets between buffers
                                            // and optimal images
     u32 valid_memory_types{~0u};
-    std::function<void()> memory_pressure_callback; ///< Callback to free resources under memory pressure
+    std::function<void()>
+        memory_pressure_callback; ///< Callback to free resources under memory pressure
+    mutable std::mutex memory_pressure_mutex;
 };
 
 } // namespace Vulkan

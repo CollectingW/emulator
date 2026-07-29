@@ -73,3 +73,5 @@ externals/moltenvk-ios/
 dtrace-out/
 *.diff
 .cache/
+
+.diagnostics/

@@ -12,5 +12,6 @@ data class Patch(
     val version: String,
     val type: Int,
     val programId: String,
-    val titleId: String
+    val titleId: String,
+    val removable: Boolean
 )

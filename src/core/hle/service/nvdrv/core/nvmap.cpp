@@ -9,10 +9,12 @@
 #include "common/assert.h"
 #include "common/common_types.h"
 #include "common/logging.h"
+#include "core/core.h"
 #include "core/hle/service/nvdrv/core/container.h"
 #include "core/hle/service/nvdrv/core/heap_mapper.h"
 #include "core/hle/service/nvdrv/core/nvmap.h"
 #include "core/memory.h"
+#include "video_core/gpu.h"
 #include "video_core/host1x/host1x.h"
 
 namespace Service::Nvidia::NvCore {
@@ -85,8 +87,19 @@ void NvMap::UnmapHandle(Handle& handle_description) {
         handle_description.unmap_queue_entry.reset();
     }
 
+    const bool has_gmmu_mapping = handle_description.pin_virt_address >= 0x1000;
+    const bool has_smmu_mapping = handle_description.d_address >= 0x1000;
+    if (has_gmmu_mapping || has_smmu_mapping) {
+        // Async GPU commands may still reference either mapping. Drain commands submitted before
+        // the unmap so the device mapping cannot disappear while they are executing.
+        auto& system = host1x.System();
+        if (system.IsPoweredOn() && system.GPU().IsAsync()) {
+            system.GPU().SynchronizeGPUThread();
+        }
+    }
+
     // Free and unmap the handle from Host1x GMMU
-    if (handle_description.pin_virt_address && handle_description.pin_virt_address >= 4096) {
+    if (has_gmmu_mapping) {
         host1x.GMMU().Unmap(static_cast<GPUVAddr>(handle_description.pin_virt_address),
                             handle_description.aligned_size);
         host1x.Allocator().Free(handle_description.pin_virt_address,
@@ -223,22 +236,24 @@ DAddr NvMap::PinHandle(NvMap::Handle::Id handle, bool low_area_pin) {
                 // Try to free multiple handles from the queue
                 while (!unmap_queue.empty() && free_attempts < MAX_FREE_ATTEMPTS) {
                     if (auto freeHandleDesc{unmap_queue.front()}) {
-                        // Handles in the unmap queue are guaranteed not to be pinned so don't bother
-                        // checking if they are before unmapping
+                        // Handles in the unmap queue are guaranteed not to be pinned so don't
+                        // bother checking if they are before unmapping
                         std::scoped_lock freeLock(freeHandleDesc->mutex);
-                        if (freeHandleDesc->d_address) {
-                            UnmapHandle(*freeHandleDesc);
-                            freed_any = true;
+                        const bool was_mapped = freeHandleDesc->d_address != 0;
+                        const bool has_unmap_queue_entry =
+                            freeHandleDesc->unmap_queue_entry.has_value();
+                        UnmapHandle(*freeHandleDesc);
+                        freed_any |= was_mapped;
+                        if (!has_unmap_queue_entry) {
+                            unmap_queue.pop_front();
                         }
-                        // Remove from queue even if d_address was 0 (already unmapped)
-                        unmap_queue.pop_front();
                     } else {
                         unmap_queue.pop_front();
                     }
                     free_attempts++;
                 }
 
-                if (!freed_any || unmap_queue.empty()) {
+                if (!freed_any) {
                     LOG_CRITICAL(Service_NVDRV, "Ran out of SMMU address space! No more handles to free.");
                     // Break out of the loop to prevent infinite spinning when no handles can be freed
                     return 0;

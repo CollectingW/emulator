@@ -12,6 +12,7 @@
 #include "common/common_types.h"
 #include "common/literals.h"
 #include "common/logging.h"
+#include "common/scope_exit.h"
 #include <ranges>
 #include "video_core/vulkan_common/vma.h"
 #include "video_core/vulkan_common/vulkan_device.h"
@@ -239,6 +240,30 @@ MemoryAllocator::MemoryAllocator(const Device& device_)
 
 MemoryAllocator::~MemoryAllocator() = default;
 
+bool MemoryAllocator::TryRecoverFromOutOfMemory(VkResult result) const {
+    if ((result != VK_ERROR_OUT_OF_DEVICE_MEMORY && result != VK_ERROR_OUT_OF_HOST_MEMORY) ||
+        !memory_pressure_callback) {
+        return false;
+    }
+    static thread_local bool is_handling_memory_pressure = false;
+    if (is_handling_memory_pressure) {
+        LOG_WARNING(Render_Vulkan, "Skipping recursive Vulkan memory-pressure recovery (result={})",
+                    static_cast<s32>(result));
+        return false;
+    }
+    std::scoped_lock recovery_lock{memory_pressure_mutex};
+    is_handling_memory_pressure = true;
+    SCOPE_EXIT {
+        is_handling_memory_pressure = false;
+    };
+
+    LOG_WARNING(Render_Vulkan,
+                "Vulkan allocation failed with result {}; freeing cached resources and retrying",
+                static_cast<s32>(result));
+    memory_pressure_callback();
+    return true;
+}
+
 vk::Image MemoryAllocator::CreateImage(const VkImageCreateInfo& ci) const {
     const VmaAllocationCreateInfo alloc_ci = {
         .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
@@ -254,7 +279,26 @@ vk::Image MemoryAllocator::CreateImage(const VkImageCreateInfo& ci) const {
     VkImage handle{};
     VmaAllocation allocation{};
 
-    vk::Check(vmaCreateImage(allocator, &ci, &alloc_ci, &handle, &allocation, nullptr));
+    VkResult result = vmaCreateImage(allocator, &ci, &alloc_ci, &handle, &allocation, nullptr);
+    if (TryRecoverFromOutOfMemory(result)) {
+        handle = VK_NULL_HANDLE;
+        allocation = VK_NULL_HANDLE;
+        result = vmaCreateImage(allocator, &ci, &alloc_ci, &handle, &allocation, nullptr);
+        if (result == VK_SUCCESS) {
+            LOG_INFO(Render_Vulkan,
+                     "Vulkan image allocation recovered after emergency cleanup ({}x{}x{}, "
+                     "mip_levels={}, array_layers={})",
+                     ci.extent.width, ci.extent.height, ci.extent.depth, ci.mipLevels,
+                     ci.arrayLayers);
+        } else {
+            LOG_ERROR(Render_Vulkan,
+                      "Vulkan image allocation still failed after emergency cleanup (result={}, "
+                      "{}x{}x{}, mip_levels={}, array_layers={})",
+                      static_cast<s32>(result), ci.extent.width, ci.extent.height, ci.extent.depth,
+                      ci.mipLevels, ci.arrayLayers);
+        }
+    }
+    vk::Check(result);
 
     return vk::Image(handle, *device.GetLogical(), allocator, allocation,
                      device.GetDispatchLoader());
@@ -277,7 +321,24 @@ vk::Buffer MemoryAllocator::CreateBuffer(const VkBufferCreateInfo& ci, MemoryUsa
     VmaAllocation allocation{};
     VkMemoryPropertyFlags property_flags{};
 
-    vk::Check(vmaCreateBuffer(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info));
+    VkResult result = vmaCreateBuffer(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info);
+    if (TryRecoverFromOutOfMemory(result)) {
+        handle = VK_NULL_HANDLE;
+        allocation = VK_NULL_HANDLE;
+        alloc_info = {};
+        result = vmaCreateBuffer(allocator, &ci, &alloc_ci, &handle, &allocation, &alloc_info);
+        if (result == VK_SUCCESS) {
+            LOG_INFO(Render_Vulkan,
+                     "Vulkan buffer allocation recovered after emergency cleanup (size={} bytes)",
+                     ci.size);
+        } else {
+            LOG_ERROR(Render_Vulkan,
+                      "Vulkan buffer allocation still failed after emergency cleanup "
+                      "(result={}, size={} bytes)",
+                      static_cast<s32>(result), ci.size);
+        }
+    }
+    vk::Check(result);
     vmaGetAllocationMemoryProperties(allocator, allocation, &property_flags);
 
     u8* data = reinterpret_cast<u8*>(alloc_info.pMappedData);
@@ -302,9 +363,7 @@ MemoryCommit MemoryAllocator::Commit(const VkMemoryRequirements& requirements, M
     // Commit has failed, allocate more memory.
     const u64 chunk_size = AllocationChunkSize(requirements.size);
     if (!TryAllocMemory(flags, type_mask, chunk_size)) {
-        if (memory_pressure_callback) {
-            LOG_WARNING(Render_Vulkan, "Memory allocation failed, attempting to free resources...");
-            memory_pressure_callback();
+        if (TryRecoverFromOutOfMemory(VK_ERROR_OUT_OF_DEVICE_MEMORY)) {
             if (TryAllocMemory(flags, type_mask, chunk_size)) {
                 if (auto commit = TryCommit(requirements, flags)) {
                     return std::move(*commit);

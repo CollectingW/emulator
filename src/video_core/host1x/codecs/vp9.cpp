@@ -358,7 +358,8 @@ void VP9::WriteMvProbabilityUpdate(VpxRangeEncoder& writer, u8 new_prob, u8 old_
 
 Vp9PictureInfo VP9::GetVp9PictureInfo(const Host1x::NvdecCommon::NvdecRegisters& state) {
     PictureInfo picture_info;
-    host1x.GMMU().ReadBlock(state.picture_info_offset, &picture_info, sizeof(PictureInfo));
+    host1x.GMMU().ReadBlock(state.picture_info_offset, &picture_info, sizeof(PictureInfo),
+                            VideoCommon::CacheType::All, "NVDEC.VP9.picture_info");
     Vp9PictureInfo vp9_info = picture_info.Convert();
 
     InsertEntropy(state.vp9_entropy_probs_offset, vp9_info.entropy);
@@ -373,7 +374,8 @@ Vp9PictureInfo VP9::GetVp9PictureInfo(const Host1x::NvdecCommon::NvdecRegisters&
 
 void VP9::InsertEntropy(u64 offset, Vp9EntropyProbs& dst) {
     EntropyProbs entropy;
-    host1x.GMMU().ReadBlock(offset, &entropy, sizeof(EntropyProbs));
+    host1x.GMMU().ReadBlock(offset, &entropy, sizeof(EntropyProbs), VideoCommon::CacheType::All,
+                            "NVDEC.VP9.entropy_probs");
     entropy.Convert(dst);
 }
 
@@ -384,7 +386,8 @@ Vp9FrameContainer VP9::GetCurrentFrame(const Host1x::NvdecCommon::NvdecRegisters
         current_frame.info = GetVp9PictureInfo(state);
         current_frame.bit_stream.resize(current_frame.info.bitstream_size);
         host1x.GMMU().ReadBlock(state.frame_bitstream_offset, current_frame.bit_stream.data(),
-                                current_frame.info.bitstream_size);
+                                current_frame.info.bitstream_size, VideoCommon::CacheType::All,
+                                "NVDEC.VP9.bitstream");
     }
     if (!next_frame.bit_stream.empty()) {
         Vp9FrameContainer temp{

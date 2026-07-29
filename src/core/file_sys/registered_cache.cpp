@@ -438,9 +438,15 @@ void RegisteredCache::ProcessFiles(const std::vector<NcaID>& ids, std::map<u64, 
         }
         const auto nca = std::make_shared<NCA>(parser(file, id));
         if (nca->GetStatus() != Loader::ResultStatus::Success) {
-            LOG_WARNING(Service_FS,
-                        "RegisteredCache ProcessFiles: failed nca_id={}, status={}",
-                        Common::HexToString(id, false), static_cast<u16>(nca->GetStatus()));
+            if (nca->GetStatus() == Loader::ResultStatus::ErrorMissingBKTRBaseRomFS) {
+                LOG_DEBUG(Service_FS,
+                          "RegisteredCache ProcessFiles: deferred update nca_id={}, status={}",
+                          Common::HexToString(id, false), static_cast<u16>(nca->GetStatus()));
+            } else {
+                LOG_WARNING(Service_FS,
+                            "RegisteredCache ProcessFiles: failed nca_id={}, status={}",
+                            Common::HexToString(id, false), static_cast<u16>(nca->GetStatus()));
+            }
             continue;
         }
 

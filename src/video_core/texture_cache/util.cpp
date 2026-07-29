@@ -858,7 +858,8 @@ boost::container::small_vector<BufferImageCopy, 16> UnswizzleImage(Tegra::Memory
 
     if (info.type == ImageType::Linear) {
         ASSERT(output.size_bytes() >= guest_size_bytes);
-        gpu_memory.ReadBlockUnsafe(gpu_addr, output.data(), guest_size_bytes);
+        gpu_memory.ReadBlockUnsafe(gpu_addr, output.data(), guest_size_bytes,
+                                   "TextureCache.UnswizzleImage.linear");
 
         ASSERT((info.pitch >> bpp_log2) << bpp_log2 == info.pitch);
         return {{

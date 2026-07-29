@@ -59,6 +59,13 @@ public:
     Result AllocateAndOpen(KPageGroup* out, size_t num_pages, u32 option);
     Result AllocateForProcess(KPageGroup* out, size_t num_pages, u32 option, u64 process_id,
                               u8 fill_pattern);
+    Result AllocateForProcessContinuous(KPageGroup* out, KPhysicalAddress* out_tail_address,
+                                        size_t* out_tail_pages, size_t num_pages,
+                                        size_t reserve_pages, u32 option, u64 process_id,
+                                        u8 fill_pattern);
+    Result ConsumeForProcess(KPageGroup* out, KPhysicalAddress address, size_t num_pages,
+                             u32 option, u64 process_id, u8 fill_pattern);
+    void ReleaseContinuous(KPhysicalAddress address, size_t num_pages);
 
     Pool GetPool(KPhysicalAddress address) const {
         return this->GetManager(address).GetPool();
@@ -353,6 +360,8 @@ private:
 
     Result AllocatePageGroupImpl(KPageGroup* out, size_t num_pages, Pool pool, Direction dir,
                                  bool unoptimized, bool random);
+    void PrepareForProcess(KPhysicalAddress address, size_t num_pages, Pool pool, u64 process_id,
+                           u8 fill_pattern);
 
 private:
     template <typename T>

@@ -175,6 +175,8 @@ public:
 
     [[nodiscard]] u64 ReadInstruction(u32 address) override;
 
+    [[nodiscard]] bool HasValidEntryInstruction() const noexcept;
+
     [[nodiscard]] u32 ReadCbufValue(u32 cbuf_index, u32 cbuf_offset) override;
 
     [[nodiscard]] u32 ReadCbufSize(u32 cbuf_index) override;

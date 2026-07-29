@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/assert.h"
+#include "common/profiling.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/thread.h"
@@ -31,6 +32,7 @@ static void RunThread(std::stop_token stop_token, Core::System& system, VideoCor
         if (stop_token.stop_requested()) {
             break;
         }
+        CITRON_PROFILE_SCOPE("GPUThread::ProcessCommand");
         if (auto* submit_list = std::get_if<SubmitListCommand>(&next.data)) {
             scheduler.Push(submit_list->channel, std::move(submit_list->entries));
         } else if (std::holds_alternative<GPUTickCommand>(next.data)) {
@@ -39,6 +41,8 @@ static void RunThread(std::stop_token stop_token, Core::System& system, VideoCor
             rasterizer->FlushRegion(flush->addr, flush->size);
         } else if (const auto* invalidate = std::get_if<InvalidateRegionCommand>(&next.data)) {
             rasterizer->OnCacheInvalidation(invalidate->addr, invalidate->size);
+        } else if (std::holds_alternative<SynchronizeCommand>(next.data)) {
+            // The command's fence is signaled below after all earlier queue entries are processed.
         } else {
             ASSERT(false);
         }
@@ -86,6 +90,14 @@ void ThreadManager::FlushRegion(DAddr addr, u64 size) {
 
 void ThreadManager::TickGPU() {
     PushCommand(GPUTickCommand());
+}
+
+void ThreadManager::Synchronize() {
+    if (!is_async || !thread.joinable() || thread.get_stop_token().stop_requested() ||
+        thread.get_id() == std::this_thread::get_id()) {
+        return;
+    }
+    PushCommand(SynchronizeCommand(), true);
 }
 
 void ThreadManager::InvalidateRegion(DAddr addr, u64 size) {

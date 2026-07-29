@@ -28,10 +28,13 @@
 #endif // ^^^ Linux ^^^
 
 #include <atomic>
+#include <condition_variable>
+#include <cstdio>
 #include <limits>
 #include <mutex>
 #include <random>
 #include <stdexcept>
+#include <thread>
 
 #include "common/alignment.h"
 #include "common/assert.h"
@@ -504,10 +507,34 @@ public:
 #endif
 
         free_manager.SetAddressSpace(virtual_base, virtual_size);
+        max_map_count = ReadUnsignedFile("/proc/sys/vm/max_map_count");
+        if (max_map_count != 0) {
+            vma_budget = max_map_count > VmaSafetyReserve ? max_map_count - VmaSafetyReserve
+                                                          : max_map_count;
+            LOG_INFO(HW_Memory, "Host VMA limit: max_map_count={}, budget={}, reserve={}",
+                     max_map_count, vma_budget, max_map_count - vma_budget);
+            vma_sampler_thread = std::thread([this] { VmaSamplerLoop(); });
+        }
         good = true;
     }
 
     ~Impl() {
+        vma_sampler_stop.store(true, std::memory_order_release);
+        vma_sampler_cv.notify_one();
+        if (vma_sampler_thread.joinable()) {
+            vma_sampler_thread.join();
+        }
+
+        if (max_map_count != 0) {
+            const u64 current = CountProcessVmas();
+            const u64 peak = std::max(current, peak_vma_count.load(std::memory_order_relaxed));
+            LOG_INFO(HW_Memory,
+                     "Host VMA summary: current={}, sampled_peak={}, budget={}, max_map_count={}, "
+                     "map_count={}, unmap_count={}",
+                     current, peak, vma_budget, max_map_count,
+                     map_count.load(std::memory_order_relaxed),
+                     unmap_count.load(std::memory_order_relaxed));
+        }
         Release();
     }
 
@@ -518,6 +545,9 @@ public:
 
         // Intersect the range with our address space.
         AdjustMap(&virtual_offset, &length);
+        if (length == 0) {
+            return;
+        }
 
         // We are removing a placeholder.
         free_manager.AllocateBlock(virtual_base + virtual_offset, length);
@@ -555,6 +585,8 @@ public:
             Common::Log::Stop();
             Crash();
         }
+
+        RequestVmaSample(map_id);
     }
 
     void Unmap(size_t virtual_offset, size_t length) {
@@ -567,6 +599,9 @@ public:
 
         // Intersect the range with our address space.
         AdjustMap(&virtual_offset, &length);
+        if (length == 0) {
+            return;
+        }
 
         // Merge with any adjacent placeholder mappings.
         auto [merged_pointer, merged_size] =
@@ -594,6 +629,9 @@ public:
     void Protect(size_t virtual_offset, size_t length, bool read, bool write, bool execute) {
         // Intersect the range with our address space.
         AdjustMap(&virtual_offset, &length);
+        if (length == 0) {
+            return;
+        }
 
         int flags = PROT_NONE;
         if (read) {
@@ -623,6 +661,104 @@ public:
     u8* virtual_map_base{reinterpret_cast<u8*>(MAP_FAILED)};
 
 private:
+    static constexpr u64 VmaSampleInterval = 1024;
+    static constexpr u64 VmaSafetyReserve = 4096;
+
+    static u64 ReadUnsignedFile(const char* path) {
+        std::FILE* file = std::fopen(path, "r");
+        if (!file) {
+            return 0;
+        }
+        SCOPE_EXIT { std::fclose(file); };
+
+        unsigned long long value = 0;
+        return std::fscanf(file, "%llu", &value) == 1 ? static_cast<u64>(value) : 0;
+    }
+
+    static u64 CountProcessVmas() {
+        std::FILE* file = std::fopen("/proc/self/maps", "r");
+        if (!file) {
+            return 0;
+        }
+        SCOPE_EXIT { std::fclose(file); };
+
+        u64 count = 0;
+        char buffer[4096];
+        while (std::fgets(buffer, sizeof(buffer), file)) {
+            ++count;
+        }
+        return count;
+    }
+
+    void RequestVmaSample(u64 map_id) {
+        if (max_map_count == 0 || map_id % VmaSampleInterval != 0) {
+            return;
+        }
+
+        requested_vma_sample.store(map_id, std::memory_order_release);
+        vma_sampler_cv.notify_one();
+    }
+
+    void VmaSamplerLoop() {
+        u64 sampled_map_id = 0;
+        while (true) {
+            std::unique_lock lock{vma_sampler_mutex};
+            vma_sampler_cv.wait(lock, [this, sampled_map_id] {
+                return vma_sampler_stop.load(std::memory_order_acquire) ||
+                       requested_vma_sample.load(std::memory_order_acquire) != sampled_map_id;
+            });
+            if (vma_sampler_stop.load(std::memory_order_acquire)) {
+                return;
+            }
+
+            sampled_map_id = requested_vma_sample.load(std::memory_order_acquire);
+            lock.unlock();
+            SampleVmaUsage(sampled_map_id);
+        }
+    }
+
+    void SampleVmaUsage(u64 map_id) {
+
+        const u64 current = CountProcessVmas();
+        if (current == 0) {
+            return;
+        }
+
+        u64 previous_peak = peak_vma_count.load(std::memory_order_relaxed);
+        while (current > previous_peak &&
+               !peak_vma_count.compare_exchange_weak(previous_peak, current,
+                                                     std::memory_order_relaxed)) {
+        }
+
+        if (map_id % (VmaSampleInterval * 8) == 0) {
+            LOG_INFO(HW_Memory,
+                     "Host VMA sample: current={}, peak={}, budget={}, max_map_count={}, map_id={}, "
+                     "unmap_count={}",
+                     current, peak_vma_count.load(std::memory_order_relaxed), vma_budget,
+                     max_map_count, map_id, unmap_count.load(std::memory_order_relaxed));
+        }
+
+        if (current >= vma_budget) {
+            LOG_CRITICAL(HW_Memory,
+                         "Host VMA budget exhausted: current={}, peak={}, budget={}, "
+                         "max_map_count={}, map_id={}, unmap_count={}",
+                         current, peak_vma_count.load(std::memory_order_relaxed), vma_budget,
+                         max_map_count, map_id, unmap_count.load(std::memory_order_relaxed));
+        } else if (current >= (vma_budget * 9) / 10) {
+            LOG_WARNING(HW_Memory,
+                        "Host VMA usage critical: current={}, peak={}, budget={}, "
+                        "max_map_count={}, map_id={}",
+                        current, peak_vma_count.load(std::memory_order_relaxed), vma_budget,
+                        max_map_count, map_id);
+        } else if (current >= (vma_budget * 3) / 4) {
+            LOG_WARNING(HW_Memory,
+                        "Host VMA usage high: current={}, peak={}, budget={}, max_map_count={}, "
+                        "map_id={}",
+                        current, peak_vma_count.load(std::memory_order_relaxed), vma_budget,
+                        max_map_count, map_id);
+        }
+    }
+
     /// Release all resources in the object
     void Release() {
         if (virtual_map_base != MAP_FAILED) {
@@ -666,6 +802,14 @@ private:
     FreeRegionManager free_manager{};
     std::atomic<u64> map_count{0};
     std::atomic<u64> unmap_count{0};
+    std::atomic<u64> peak_vma_count{0};
+    std::atomic<u64> requested_vma_sample{0};
+    std::atomic<bool> vma_sampler_stop{false};
+    std::mutex vma_sampler_mutex;
+    std::condition_variable vma_sampler_cv;
+    std::thread vma_sampler_thread;
+    u64 max_map_count{};
+    u64 vma_budget{};
 };
 
 #else // ^^^ Linux ^^^ vvv Generic vvv

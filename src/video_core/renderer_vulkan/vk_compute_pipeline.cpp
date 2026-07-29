@@ -202,7 +202,8 @@ void ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
 
             const size_t byte_size = static_cast<size_t>(desc.count) << desc.size_shift;
             bindless_scratch.resize(byte_size);
-            gpu_memory.ReadBlockUnsafe(cbuf_addr, bindless_scratch.data(), byte_size);
+            gpu_memory.ReadBlockUnsafe(cbuf_addr, bindless_scratch.data(), byte_size,
+                                       "Vulkan.ComputePipeline.bindless_cbuf");
             BindlessCacheEntry& entry = AcquireBindlessEntry(
                 bindless_cache, bindless_cache_rr, cbuf_addr, desc.count,
                 image_table_generation);

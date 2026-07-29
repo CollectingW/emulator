@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "common/assert.h"
 #include "common/common_types.h"
 #include "core/hle/kernel/k_process.h"
 #include "core/hle/kernel/k_resource_limit.h"
@@ -45,6 +46,16 @@ public:
     /// Commit the resource reservation, destruction of this object does not release the resource
     void Commit() {
         m_limit = nullptr;
+    }
+
+    /// Set a successful reservation to a smaller retained value, immediately releasing the
+    /// difference.
+    void Shrink(s64 value) {
+        ASSERT(value >= 0 && value <= m_value);
+        if (m_limit && m_succeeded && value < m_value) {
+            m_limit->Release(m_resource, m_value - value);
+        }
+        m_value = value;
     }
 
     bool Succeeded() const {
