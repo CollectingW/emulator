@@ -4569,11 +4569,11 @@ stage_clangcl() {
             local _pd_hash; _pd_hash="$(_pgo_profdata_hash "${profdata_use}")"
             local _profdata_use_win; _profdata_use_win="$(cygpath -am "${profdata_use}")"
             if [[ "${PGO_MODE}" == "fe" ]]; then
-                pgo_flags="/clang:-fprofile-instr-use=\"${_profdata_use_win}\" /DCITRON_PGO_PROFDATA_HASH=${_pd_hash} /clang:-Wno-error=backend-plugin"
-                pgo_flags_dash="-fprofile-instr-use=\"${_profdata_use_win}\" -DCITRON_PGO_PROFDATA_HASH=${_pd_hash} -Wno-error=backend-plugin"
+                pgo_flags="/clang:-fprofile-instr-use=\\\"${_profdata_use_win}\\\" /DCITRON_PGO_PROFDATA_HASH=${_pd_hash} /clang:-Wno-error=backend-plugin"
+                pgo_flags_dash="-fprofile-instr-use=\\\"${_profdata_use_win}\\\" -DCITRON_PGO_PROFDATA_HASH=${_pd_hash} -Wno-error=backend-plugin"
             else
-                pgo_flags="/clang:-fprofile-use=\"${_profdata_use_win}\" /DCITRON_PGO_PROFDATA_HASH=${_pd_hash} /clang:-Wno-error=backend-plugin"
-                pgo_flags_dash="-fprofile-use=\"${_profdata_use_win}\" -DCITRON_PGO_PROFDATA_HASH=${_pd_hash} -Wno-error=backend-plugin"
+                pgo_flags="/clang:-fprofile-use=\\\"${_profdata_use_win}\\\" /DCITRON_PGO_PROFDATA_HASH=${_pd_hash} /clang:-Wno-error=backend-plugin"
+                pgo_flags_dash="-fprofile-use=\\\"${_profdata_use_win}\\\" -DCITRON_PGO_PROFDATA_HASH=${_pd_hash} -Wno-error=backend-plugin"
             fi
             ;;
         ir:csgenerate)
