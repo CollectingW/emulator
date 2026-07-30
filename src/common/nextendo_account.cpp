@@ -4,6 +4,8 @@
 #include <mutex>
 #include <vector>
 
+#include <fmt/format.h>
+
 #include "common/fs/file.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"

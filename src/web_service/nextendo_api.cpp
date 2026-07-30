@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 
+#include <fmt/format.h>
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <openssl/rand.h>
