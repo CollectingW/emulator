@@ -433,6 +433,7 @@ private:
     QHBoxLayout* unified_top_bar_layout = nullptr;
     LoadingScreen* loading_screen;
     QTimer shutdown_timer;
+    QTimer nextendo_presence_timer;
     OverlayDialog* shutdown_dialog{};
     PerformanceOverlay* performance_overlay{};
     MultiplayerRoomOverlay* multiplayer_room_overlay{};
@@ -463,6 +464,9 @@ private:
     bool main_window_is_closing = false;
     std::unique_ptr<EmuThread> emu_thread;
     QString current_game_path;
+    std::string current_game_name;
+
+    void SyncNextendoHistory();
     bool user_flag_cmd_line = false;
     bool auto_paused = false;
     bool auto_muted = false;

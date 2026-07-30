@@ -730,6 +730,10 @@ struct Values {
                                            Category::Network};
     Setting<std::string> lobby_api_url{linkage, "api.ynet-fun.xyz", "lobby_api_url",
                                        Category::Network};
+    Setting<bool> enable_nextendo{linkage, false, "enable_nextendo", Category::Network};
+    Setting<std::string> nextendo_server_ip{linkage, "", "nextendo_server_ip", Category::Network};
+    Setting<std::string> nextendo_nat_ip{linkage, "", "nextendo_nat_ip", Category::Network};
+    Setting<std::string> nextendo_pid{linkage, "", "nextendo_pid", Category::Network};
 
     // WebService
     Setting<bool> enable_telemetry{linkage, false, "enable_telemetry", Category::WebService};

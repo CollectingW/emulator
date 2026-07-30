@@ -260,6 +260,8 @@ add_executable(citron
     multiplayer/validation.h
     play_time_manager.cpp
     play_time_manager.h
+    nextendo_friends_dialog.cpp
+    nextendo_friends_dialog.h
     precompiled_headers.h
     qt_common.cpp
     qt_common.h

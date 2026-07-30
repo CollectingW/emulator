@@ -154,12 +154,18 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "citron/install_dialog.h"
 #include "citron/loading_screen.h"
 #include "citron/main.h"
+#include "citron/nextendo_friends_dialog.h"
 #include "citron/play_time_manager.h"
+#include "common/nextendo_account.h"
+#include "common/nextendo_friends.h"
 #include "citron/startup_checks.h"
 #include "citron/uisettings.h"
 #include "citron/theme.h"
 #include "citron/util/rainbow_style.h"
 #include "common/settings.h"
+#ifdef ENABLE_WEB_SERVICE
+#include "web_service/nextendo_api.h"
+#endif
 #include "common/string_util.h"
 #include "common/xci_trimmer.h"
 #include "core/core.h"
@@ -1896,6 +1902,34 @@ void GMainWindow::ConnectMenuEvents() {
             &MultiplayerState::OnCreateRoom);
     connect(ui->action_Leave_Room, &QAction::triggered, multiplayer_state,
             &MultiplayerState::OnCloseRoom);
+    nextendo_presence_timer.setInterval(5000);
+    connect(&nextendo_presence_timer, &QTimer::timeout, this, [this] {
+#ifdef ENABLE_WEB_SERVICE
+        s32 status = 0;
+        std::string app_field;
+        if (!Common::NextendoAccount::IsLinked() ||
+            !Common::NextendoFriends::TakeLocalPresenceIfChanged(status, app_field)) {
+            return;
+        }
+        const std::string app_id =
+            emulation_running ? fmt::format("{:016X}", play_time_manager->GetProgramId())
+                              : std::string{};
+        std::thread{[status, app_field, app_id] {
+            WebService::NextendoApi::PushPresence(status, app_field, app_id);
+        }}.detach();
+#endif
+    });
+    nextendo_presence_timer.start();
+
+    connect(ui->action_Nextendo_Friends, &QAction::triggered, this, [this] {
+        if (!Common::NextendoAccount::IsLinked()) {
+            QMessageBox::information(
+                this, tr("Nextendo Friends"),
+                tr("Sign in to your Nextendo account first, in Emulation > Configure > Network."));
+            return;
+        }
+        NextendoFriendsDialog(this).exec();
+    });
     connect(ui->action_Connect_To_Room, &QAction::triggered, multiplayer_state,
             &MultiplayerState::OnDirectConnectToRoom);
     connect(ui->action_Show_Room, &QAction::triggered, multiplayer_state,
@@ -2418,6 +2452,7 @@ void GMainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletP
                      .toStdString();
     LOG_INFO(Frontend, "Booting game: {:016X} | {} | {}", title_id, title_name, title_version);
     const auto gpu_vendor = system->GPU().Renderer().GetDeviceVendor();
+    current_game_name = title_name;
     UpdateWindowTitle(title_name, title_version, gpu_vendor);
 
     loading_screen->Prepare(system->GetAppLoader());
@@ -2501,6 +2536,11 @@ void GMainWindow::OnEmulationStopTimeExpired() {
 }
 
 void GMainWindow::OnEmulationStopped() {
+    // Every shutdown path lands here; ShutdownGame() is bypassed by the Stop button.
+    play_time_manager->Stop();
+    SyncNextendoHistory();
+    Common::NextendoFriends::SetLocalStatus(Common::NextendoFriends::PresenceOnline);
+
     shutdown_timer.stop();
     if (emu_thread) {
         emu_thread->disconnect();
@@ -2605,7 +2645,6 @@ void GMainWindow::ShutdownGame() {
         return;
     }
 
-    play_time_manager->Stop();
     OnShutdownBegin();
     OnEmulationStopTimeExpired();
     OnEmulationStopped();
@@ -4069,6 +4108,7 @@ void GMainWindow::OnStartGame() {
     UpdateMenuState();
     OnTasStateChanged();
 
+    Common::NextendoFriends::SetLocalStatus(Common::NextendoFriends::PresenceOnlinePlay);
     play_time_manager->SetProgramId(system->GetApplicationProcessProgramID());
     play_time_manager->Start();
 
@@ -6916,4 +6956,30 @@ int main(int argc, char* argv[]) {
 
 void GMainWindow::OnToggleGridView() {
     game_list->ToggleViewMode();
+}
+
+void GMainWindow::SyncNextendoHistory() {
+#ifdef ENABLE_WEB_SERVICE
+    const bool linked = Common::NextendoAccount::IsLinked();
+    const u64 program_id = play_time_manager->GetProgramId();
+    const u64 seconds = play_time_manager->GetPlayTime(program_id);
+
+    LOG_INFO(Frontend, "Nextendo history: linked={} title={:016X} seconds={}", linked, program_id,
+             seconds);
+
+    if (!linked || program_id == 0 || seconds == 0) {
+        return;
+    }
+
+    WebService::NextendoApi::HistoryEntry entry;
+    entry.title_id = fmt::format("{:016X}", program_id);
+    entry.name = current_game_name;
+    entry.seconds = seconds;
+    entry.last_played = fmt::format(
+        "{:%Y-%m-%dT%H:%M:%SZ}", fmt::gmtime(std::chrono::system_clock::to_time_t(
+                                     std::chrono::system_clock::now())));
+
+    // Detached: shutdown must not block on the network.
+    std::thread{[entry] { WebService::NextendoApi::SyncHistory({entry}); }}.detach();
+#endif
 }

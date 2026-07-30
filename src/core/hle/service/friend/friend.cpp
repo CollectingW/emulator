@@ -8,6 +8,8 @@
 #include "core/core.h"
 #include "core/hle/kernel/k_event.h"
 #include "core/hle/service/acc/errors.h"
+#include "common/nextendo_account.h"
+#include "common/nextendo_friends.h"
 #include "core/hle/service/friend/friend.h"
 #include "core/hle/service/friend/friend_interface.h"
 #include "core/hle/service/ipc_helpers.h"
@@ -20,6 +22,72 @@
 #undef CreateSemaphore
 
 namespace Service::Friend {
+
+namespace {
+
+#pragma pack(push, 1)
+struct UserPresenceImpl {
+    Common::UUID user_id;                  // 0x00
+    s64 last_time_online_timestamp;        // 0x10
+    u32 status;                            // 0x18
+    u8 same_presence_group_application;    // 0x1C
+    std::array<u8, 3> unknown;             // 0x1D
+    std::array<u8, 0xC0> app_key_value;    // 0x20
+};
+static_assert(sizeof(UserPresenceImpl) == 0xE0, "UserPresenceImpl has the wrong size");
+
+struct FriendImpl {
+    Common::UUID user_id;         // 0x00
+    u64 network_user_id;          // 0x10
+    std::array<char, 0x21> nickname; // 0x18
+    std::array<u8, 7> nickname_pad;  // 0x39, aligns presence to 0x40
+    UserPresenceImpl presence;    // 0x40
+    u8 is_favourite;              // 0x120
+    u8 is_new;                    // 0x121
+    std::array<u8, 6> unknown;    // 0x122
+    u8 is_valid;                  // 0x128
+    std::array<u8, 0xD7> padding; // to 0x200
+};
+static_assert(sizeof(FriendImpl) == 0x200, "FriendImpl has the wrong size");
+static_assert(offsetof(FriendImpl, presence) == 0x40);
+static_assert(offsetof(FriendImpl, is_favourite) == 0x120);
+static_assert(offsetof(FriendImpl, is_valid) == 0x128);
+#pragma pack(pop)
+
+// The account server hands out NEX PIDs; the guest wants a Uid. Derive one deterministically so a
+// friend keeps the same Uid across launches. The high half matches what Ryujinx uses.
+Common::UUID UidForPid(u64 pid) {
+    std::array<u8, 16> raw{};
+    std::memcpy(raw.data(), &pid, sizeof(pid));
+    const u64 high = 0x1100000000000000ULL;
+    std::memcpy(raw.data() + 8, &high, sizeof(high));
+    return Common::UUID{raw};
+}
+
+FriendImpl MakeFriend(const Common::NextendoFriends::Entry& entry) {
+    FriendImpl out{};
+    out.user_id = UidForPid(entry.pid);
+    out.network_user_id = entry.pid;
+
+    const auto length = std::min(entry.name.size(), out.nickname.size() - 1);
+    std::memcpy(out.nickname.data(), entry.name.data(), length);
+
+    out.presence.user_id = out.user_id;
+    out.presence.status = static_cast<u32>(entry.status);
+    out.presence.last_time_online_timestamp = 0x7FFFFFFFFFFFFFFFLL;
+    // Marks the friend as being in THIS application, without which the game asks for zero friend
+    // PIDs and never queries their session.
+    out.presence.same_presence_group_application = 1;
+
+    const auto blob = std::min(entry.app_field.size(), out.presence.app_key_value.size());
+    std::memcpy(out.presence.app_key_value.data(), entry.app_field.data(), blob);
+
+    out.is_valid = 1;
+    return out;
+}
+
+} // Anonymous namespace
+
 
 class IFriendService final : public ServiceFramework<IFriendService> {
 public:
@@ -152,10 +220,30 @@ public:
     }
 
     void GetFriendListIds(HLERequestContext& ctx) {
-        LOG_WARNING(Service_Friend, "(STUBBED) GetFriendListIds called");
+        IPC::RequestParser rp{ctx};
+        const auto offset = rp.Pop<s32>();
+
+        u32 count = 0;
+        if (offset == 0 && ctx.CanWriteBuffer()) {
+            const auto entries = Common::NextendoFriends::Get();
+            const auto capacity = ctx.GetWriteBufferNumElements<u64>();
+            std::vector<u64> ids;
+            for (const auto& entry : entries) {
+                if (ids.size() >= capacity) {
+                    break;
+                }
+                ids.push_back(entry.pid);
+            }
+            if (!ids.empty()) {
+                ctx.WriteBuffer(ids);
+            }
+            count = static_cast<u32>(ids.size());
+        }
+
+        LOG_INFO(Service_Friend, "[Nextendo] GetFriendListIds -> {}", count);
         IPC::ResponseBuilder rb{ctx, 3};
         rb.Push(ResultSuccess);
-        rb.Push<u32>(0); // Friend count
+        rb.Push<u32>(count);
     }
 
     void GetReceivedFriendInvitationCountCache(HLERequestContext& ctx) {
@@ -457,11 +545,28 @@ void IFriendService::GetFriendList(HLERequestContext& ctx) {
     const auto uuid = rp.PopRaw<Common::UUID>();
     [[maybe_unused]] const auto filter = rp.PopRaw<IFriendService::SizedFriendFilter>();
     const auto pid = rp.Pop<u64>();
-    LOG_WARNING(Service_Friend, "(STUBBED) GetFriendList called, offset={}, uuid=0x{}, pid={}", friend_offset,
-                uuid.RawString(), pid);
+    u32 count = 0;
+    if (friend_offset == 0 && ctx.CanWriteBuffer()) {
+        const auto entries = Common::NextendoFriends::Get();
+        const auto capacity = ctx.GetWriteBufferNumElements<FriendImpl>();
+        std::vector<FriendImpl> list;
+        for (const auto& entry : entries) {
+            if (list.size() >= capacity) {
+                break;
+            }
+            list.push_back(MakeFriend(entry));
+        }
+        if (!list.empty()) {
+            ctx.WriteBuffer(list);
+        }
+        count = static_cast<u32>(list.size());
+    }
+
+    LOG_INFO(Service_Friend, "[Nextendo] GetFriendList offset={} uuid=0x{} pid={} -> {}",
+             friend_offset, uuid.RawString(), pid, count);
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
-    rb.Push<u32>(0); // Friend count
+    rb.Push<u32>(count);
 }
 
 void IFriendService::CheckFriendListAvailability(HLERequestContext& ctx) {
@@ -496,7 +601,24 @@ void IFriendService::DeclareCloseOnlinePlaySession(HLERequestContext& ctx) {
 }
 
 void IFriendService::UpdateUserPresence(HLERequestContext& ctx) {
-    LOG_WARNING(Service_Friend, "(STUBBED) UpdateUserPresence called");
+    if (ctx.CanReadBuffer() && ctx.GetReadBufferSize() >= sizeof(UserPresenceImpl)) {
+        UserPresenceImpl presence{};
+        std::memcpy(&presence, ctx.ReadBuffer().data(), sizeof(presence));
+        // A title can publish Offline while it is still running -- MK8D does, on leaving the
+        // online menu. Relaying that verbatim reports us offline mid-session, so floor it at
+        // Online: this handler only runs while a game is up. The app_field is taken as-is,
+        // since that is the title's own joinable-session data.
+        const auto status = std::max<s32>(static_cast<s32>(presence.status),
+                                          Common::NextendoFriends::PresenceOnline);
+        Common::NextendoFriends::SetLocalPresence(
+            status, std::string{reinterpret_cast<const char*>(presence.app_key_value.data()),
+                                presence.app_key_value.size()});
+        LOG_INFO(Service_Friend, "[Nextendo] UpdateUserPresence status={} -> {}",
+                 presence.status, status);
+    } else {
+        LOG_WARNING(Service_Friend, "UpdateUserPresence called with no presence buffer");
+    }
+
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
 }

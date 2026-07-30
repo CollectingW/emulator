@@ -50,6 +50,9 @@ private:
         Network::Domain domain = Network::Domain::INET;
         Network::Type type = Network::Type::DGRAM;
         Network::Protocol protocol = Network::Protocol::UDP;
+        u16 bound_port = 0;
+        bool sni_injected = false;
+        bool connected = false;
     };
 
     struct PollWork {

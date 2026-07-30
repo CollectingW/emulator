@@ -65,6 +65,107 @@
        </layout>
       </widget>
      </item>
+     <item>
+      <widget class="QGroupBox" name="nextendo_group">
+       <property name="title">
+        <string>Nextendo Network Integration</string>
+       </property>
+       <layout class="QGridLayout" name="gridLayout_nextendo">
+        <item row="0" column="0" colspan="2">
+         <widget class="QCheckBox" name="enable_nextendo">
+          <property name="text">
+           <string>Enable Nextendo Network Redirection</string>
+          </property>
+          <property name="toolTip">
+           <string>Redirect Nintendo Network traffic to the Nextendo backend for cross-emulator online play</string>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="0">
+         <widget class="QLabel" name="label_nextendo_server">
+          <property name="text">
+           <string>Nextendo Server IP</string>
+          </property>
+         </widget>
+        </item>
+        <item row="1" column="1">
+         <widget class="QLineEdit" name="nextendo_server_ip">
+          <property name="echoMode">
+           <enum>QLineEdit::Password</enum>
+          </property>
+          <property name="placeholderText">
+           <string>nextendo.network</string>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="0">
+         <widget class="QLabel" name="label_nextendo_nat">
+          <property name="text">
+           <string>Nextendo NAT Server IP</string>
+          </property>
+         </widget>
+        </item>
+        <item row="2" column="1">
+         <widget class="QLineEdit" name="nextendo_nat_ip">
+          <property name="echoMode">
+           <enum>QLineEdit::Password</enum>
+          </property>
+          <property name="placeholderText">
+           <string>nextendo.network</string>
+          </property>
+         </widget>
+        </item>
+        <item row="3" column="0" colspan="2">
+         <layout class="QHBoxLayout" name="layout_nextendo_auth">
+          <item>
+           <widget class="QPushButton" name="nextendo_login_button">
+            <property name="text">
+             <string>Sign In with Browser</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="nextendo_logout_button">
+            <property name="text">
+             <string>Sign Out</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="nextendo_friends_button">
+            <property name="text">
+             <string>Friends</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="spacer_nextendo_auth">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+         </layout>
+        </item>
+        <item row="4" column="0" colspan="2">
+         <widget class="QLabel" name="nextendo_status">
+          <property name="text">
+           <string/>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+     </item>
     </layout>
    </item>
    <item>

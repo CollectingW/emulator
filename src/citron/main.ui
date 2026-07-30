@@ -147,6 +147,8 @@
     <addaction name="separator"/>
     <addaction name="action_Show_Room"/>
     <addaction name="action_Leave_Room"/>
+    <addaction name="separator"/>
+    <addaction name="action_Nextendo_Friends"/>
    </widget>
    <widget class="QMenu" name="menu_Tools">
     <property name="title">
@@ -360,6 +362,14 @@
    </property>
    <property name="text">
     <string>&amp;Browse Public Game Lobby</string>
+   </property>
+  </action>
+  <action name="action_Nextendo_Friends">
+   <property name="enabled">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Nextendo &amp;Friends</string>
    </property>
   </action>
   <action name="action_Start_Room">

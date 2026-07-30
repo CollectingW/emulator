@@ -45,6 +45,8 @@ enum class IoMode : u32 {
 enum class OptionType : u32 {
     DoNotCloseSocket = 0,
     GetServerCertChain = 1,
+    SkipDefaultVerify = 2,
+    EnableAlpn = 3,
 };
 
 // This is nn::ssl::sf::SslVersion
@@ -421,8 +423,12 @@ private:
         case OptionType::GetServerCertChain:
             get_server_cert_chain = static_cast<bool>(parameters.value);
             break;
+        case OptionType::SkipDefaultVerify:
+        case OptionType::EnableAlpn:
+            LOG_DEBUG(Service_SSL, "OptionType option={} set to {}", static_cast<u32>(parameters.option), parameters.value);
+            break;
         default:
-            LOG_WARNING(Service_SSL, "Unknown option={}, value={}", parameters.option,
+            LOG_WARNING(Service_SSL, "Unknown option={}, value={}", static_cast<u32>(parameters.option),
                         parameters.value);
         }
 
@@ -431,11 +437,10 @@ private:
     }
 
     void Peek(HLERequestContext& ctx) {
-        LOG_WARNING(Service_SSL, "(STUBBED) called");
-
-        IPC::ResponseBuilder rb{ctx, 3};
-        rb.Push(ResultSuccess);
-        rb.Push<s32>(0); // Stub: no data available to peek
+        // [Nextendo] Nintendo's libcurl checks connection liveness via Peek.
+        // Returning ResultWouldBlock tells libcurl the connection is open and active.
+        IPC::ResponseBuilder rb{ctx, 2};
+        rb.Push(ResultWouldBlock);
     }
 
     void Poll(HLERequestContext& ctx) {
