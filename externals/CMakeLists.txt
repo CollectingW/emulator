@@ -109,6 +109,14 @@ if (CITRON_USE_EXTERNAL_SDL2 AND NOT TARGET SDL2::SDL2 AND NOT TARGET SDL3::SDL3
     set(SDL_HIDAPI ON CACHE BOOL "" FORCE)
     set(SDL_HIDAPI_LIBUSB ON CACHE BOOL "" FORCE)
 
+    # SDL probes getresuid/getresgid without _GNU_SOURCE, so the check fails on glibc while the
+    # real compile still sees unistd.h declare them -- SDL_gtk.c then redefines them and the build
+    # fails. Seed the results so check_symbol_exists skips the broken probe.
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set(HAVE_GETRESUID 1 CACHE INTERNAL "glibc provides getresuid")
+        set(HAVE_GETRESGID 1 CACHE INTERNAL "glibc provides getresgid")
+    endif()
+
     add_subdirectory(SDL)
     if (TARGET SDL3-shared)
         target_include_directories(SDL3-shared INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/SDL_compat")
