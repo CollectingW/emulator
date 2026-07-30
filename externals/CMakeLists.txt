@@ -110,11 +110,22 @@ if (CITRON_USE_EXTERNAL_SDL2 AND NOT TARGET SDL2::SDL2 AND NOT TARGET SDL3::SDL3
     set(SDL_HIDAPI_LIBUSB ON CACHE BOOL "" FORCE)
 
     # SDL probes getresuid/getresgid without _GNU_SOURCE, so the check fails on glibc while the
-    # real compile still sees unistd.h declare them -- SDL_gtk.c then redefines them and the build
-    # fails. Seed the results so check_symbol_exists skips the broken probe.
+    # real compile still sees unistd.h declare them -- SDL_gtk.c then defines its own static
+    # fallbacks and the build fails. Redo the probe correctly and seed the result, so
+    # check_symbol_exists skips SDL's. Detected rather than assumed: musl has neither symbol and
+    # still needs SDL's fallback.
     if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        set(HAVE_GETRESUID 1 CACHE INTERNAL "glibc provides getresuid")
-        set(HAVE_GETRESGID 1 CACHE INTERNAL "glibc provides getresgid")
+        include(CheckSymbolExists)
+        set(CMAKE_REQUIRED_DEFINITIONS -D_GNU_SOURCE)
+        check_symbol_exists(getresuid "unistd.h" CITRON_HAS_GETRESUID)
+        check_symbol_exists(getresgid "unistd.h" CITRON_HAS_GETRESGID)
+        unset(CMAKE_REQUIRED_DEFINITIONS)
+        if (CITRON_HAS_GETRESUID)
+            set(HAVE_GETRESUID 1 CACHE INTERNAL "getresuid is declared with _GNU_SOURCE")
+        endif()
+        if (CITRON_HAS_GETRESGID)
+            set(HAVE_GETRESGID 1 CACHE INTERNAL "getresgid is declared with _GNU_SOURCE")
+        endif()
     endif()
 
     add_subdirectory(SDL)

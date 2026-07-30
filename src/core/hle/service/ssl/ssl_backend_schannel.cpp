@@ -88,14 +88,11 @@ public:
     }
 
     Result SetVerifyOption(u32 verify_option) override {
-        // verify_option is a bitfield:
-        // Bit 0: PeerCa - verify peer certificate
-        // Bit 1: HostName - verify hostname matches certificate
-        // Bit 2: DateCheck - verify certificate date
-        // When verify_option is 0, skip all verification
-        skip_cert_verification = (verify_option == 0);
-        LOG_DEBUG(Service_SSL, "SetVerifyOption: option={}, skip_verification={}", verify_option,
-                  skip_cert_verification);
+        // [Nextendo] Always bypass, matching the OpenSSL backend; a title requesting real
+        // verification would otherwise fail the self-signed cert against the Windows trust store.
+        skip_cert_verification = true;
+        LOG_DEBUG(Service_SSL, "SetVerifyOption: option={}, bypassing cert verification for Nextendo",
+                  verify_option);
         return ResultSuccess;
     }
 
