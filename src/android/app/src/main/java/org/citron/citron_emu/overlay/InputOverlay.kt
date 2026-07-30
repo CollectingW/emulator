@@ -14,7 +14,6 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.VectorDrawable
 import android.os.Build
 import android.text.Editable
-import android.text.InputType
 import android.text.Selection
 import android.util.AttributeSet
 import android.view.HapticFeedbackConstants
@@ -106,9 +105,9 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
         Selection.setSelection(keyboardEditable, initialCursorPosition)
         keyboardLastSubmittedText = initialText
 
-        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or
-            InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or
-            InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        // Treating every field as visible-password/no-suggestions can disable composing
+        // behavior in IMEs such as Gboard. Use the actual software keyboard type instead.
+        outAttrs.inputType = SoftwareKeyboard.getInlineEditorInputType()
 
         outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_DONE
         outAttrs.initialSelStart = initialCursorPosition

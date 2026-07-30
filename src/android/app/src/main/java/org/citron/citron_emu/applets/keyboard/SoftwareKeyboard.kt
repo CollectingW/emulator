@@ -8,6 +8,7 @@ package org.citron.citron_emu.applets.keyboard
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowInsets
@@ -99,6 +100,27 @@ object SoftwareKeyboard {
     fun getInlineInitialText(): String = inlineConfig?.initial_text.orEmpty()
 
     fun getInlineInitialCursorPosition(): Int = inlineConfig?.initial_cursor_position ?: 0
+
+    fun getInlineEditorInputType(): Int =
+        inlineConfig?.let(::getEditorInputType) ?: InputType.TYPE_CLASS_TEXT
+
+    fun getEditorInputType(config: KeyboardConfig): Int {
+        val passwordEnabled = config.password_mode == SwkbdPasswordMode.Enabled.ordinal
+        return when (config.type) {
+            SwkbdType.NumberPad.ordinal -> {
+                InputType.TYPE_CLASS_NUMBER or
+                    if (passwordEnabled) InputType.TYPE_NUMBER_VARIATION_PASSWORD else 0
+            }
+            else -> {
+                InputType.TYPE_CLASS_TEXT or
+                    if (passwordEnabled) {
+                        InputType.TYPE_TEXT_VARIATION_PASSWORD
+                    } else {
+                        InputType.TYPE_TEXT_VARIATION_NORMAL
+                    }
+            }
+        }
+    }
 
     fun clearInlineConfig() {
         inlineConfig = null

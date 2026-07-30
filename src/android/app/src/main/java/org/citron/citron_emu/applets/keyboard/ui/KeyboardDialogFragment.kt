@@ -7,7 +7,6 @@ import android.app.Dialog
 import android.content.DialogInterface
 import android.os.Bundle
 import android.text.InputFilter
-import android.text.InputType
 import androidx.fragment.app.DialogFragment
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import org.citron.citron_emu.R
@@ -30,35 +29,7 @@ class KeyboardDialogFragment : DialogFragment() {
         binding.editText.filters =
             arrayOf<InputFilter>(InputFilter.LengthFilter(config.max_text_length))
 
-        // Handle input type
-        var inputType: Int
-        when (config.type) {
-            SoftwareKeyboard.SwkbdType.Normal.ordinal,
-            SoftwareKeyboard.SwkbdType.Qwerty.ordinal,
-            SoftwareKeyboard.SwkbdType.Unknown3.ordinal,
-            SoftwareKeyboard.SwkbdType.Latin.ordinal,
-            SoftwareKeyboard.SwkbdType.SimplifiedChinese.ordinal,
-            SoftwareKeyboard.SwkbdType.TraditionalChinese.ordinal,
-            SoftwareKeyboard.SwkbdType.Korean.ordinal -> {
-                inputType = InputType.TYPE_CLASS_TEXT
-                if (config.password_mode == SoftwareKeyboard.SwkbdPasswordMode.Enabled.ordinal) {
-                    inputType = inputType or InputType.TYPE_TEXT_VARIATION_PASSWORD
-                }
-            }
-            SoftwareKeyboard.SwkbdType.NumberPad.ordinal -> {
-                inputType = InputType.TYPE_CLASS_NUMBER
-                if (config.password_mode == SoftwareKeyboard.SwkbdPasswordMode.Enabled.ordinal) {
-                    inputType = inputType or InputType.TYPE_NUMBER_VARIATION_PASSWORD
-                }
-            }
-            else -> {
-                inputType = InputType.TYPE_CLASS_TEXT
-                if (config.password_mode == SoftwareKeyboard.SwkbdPasswordMode.Enabled.ordinal) {
-                    inputType = inputType or InputType.TYPE_TEXT_VARIATION_PASSWORD
-                }
-            }
-        }
-        binding.editText.inputType = inputType
+        binding.editText.inputType = SoftwareKeyboard.getEditorInputType(config)
 
         val headerText =
             config.header_text!!.ifEmpty { resources.getString(R.string.software_keyboard) }
