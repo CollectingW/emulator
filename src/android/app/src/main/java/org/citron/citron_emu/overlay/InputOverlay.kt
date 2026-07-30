@@ -105,9 +105,8 @@ class InputOverlay(context: Context, attrs: AttributeSet?) :
         Selection.setSelection(keyboardEditable, initialCursorPosition)
         keyboardLastSubmittedText = initialText
 
-        // Password/visible-password variations disable composing input in IMEs such as Gboard.
-        // Use the software keyboard's actual type so Chinese, Japanese, and Korean IMEs can
-        // compose text while numeric and password keyboards retain their intended behavior.
+        // Treating every field as visible-password/no-suggestions can disable composing
+        // behavior in IMEs such as Gboard. Use the actual software keyboard type instead.
         outAttrs.inputType = SoftwareKeyboard.getInlineEditorInputType()
 
         outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_DONE
