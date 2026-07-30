@@ -40,8 +40,7 @@ Verified working (Mario Kart 8 Deluxe 3.0.5, Linux/Vulkan):
 | Presence | Published on sign-in and game start/stop |
 | Profile name | Local Switch profile renamed to your account nickname |
 
-Implemented but **not** verified — these need a second account on a second machine, which the author
-does not have:
+Implemented but **not** verified:
 
 - friends appearing inside a game (`nn::friends` list and presence relay)
 - a friend seeing *your* presence
