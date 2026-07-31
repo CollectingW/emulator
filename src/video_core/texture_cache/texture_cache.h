@@ -58,11 +58,15 @@ TextureCache<P>::TextureCache(Runtime& runtime_, Tegra::MaxwellDeviceMemoryManag
         const s64 min_vacancy_expected = (6 * mem_threshold) / 10;
         const s64 min_vacancy_critical = (2 * mem_threshold) / 10;
         expected_memory = static_cast<u64>(
-            (std::max)((std::min)(device_local_memory - min_vacancy_expected, min_spacing_expected),
-                       DEFAULT_EXPECTED_MEMORY));
+            (std::min)(device_local_memory,
+                       (std::max)((std::min)(device_local_memory - min_vacancy_expected,
+                                             min_spacing_expected),
+                                  DEFAULT_EXPECTED_MEMORY)));
         critical_memory = static_cast<u64>(
-            (std::max)((std::min)(device_local_memory - min_vacancy_critical, min_spacing_critical),
-                       DEFAULT_CRITICAL_MEMORY));
+            (std::min)(device_local_memory,
+                       (std::max)((std::min)(device_local_memory - min_vacancy_critical,
+                                             min_spacing_critical),
+                                  DEFAULT_CRITICAL_MEMORY)));
         minimum_memory = static_cast<u64>((device_local_memory - mem_threshold) / 2);
     } else {
         expected_memory = DEFAULT_EXPECTED_MEMORY + 512_MiB;
@@ -142,10 +146,9 @@ void TextureCache<P>::RunGarbageCollector() {
 
 template <class P>
 void TextureCache<P>::TickFrame() {
-    if (runtime.CanReportMemoryUsage()) {
-        total_used_memory = runtime.GetDeviceMemoryUsage();
-    }
-    if (total_used_memory > minimum_memory) {
+    const u64 gc_memory_usage =
+        runtime.CanReportMemoryUsage() ? runtime.GetDeviceMemoryUsage() : total_used_memory;
+    if (gc_memory_usage > minimum_memory) {
         RunGarbageCollector();
     }
     sentenced_images.Tick();

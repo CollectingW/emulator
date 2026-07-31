@@ -1444,16 +1444,6 @@ void Device::CollectPhysicalMemoryInfo() {
         const u64 reserve_memory = std::min<u64>(device_access_memory / 8, 1_GiB);
         device_access_memory -= reserve_memory;
 
-        const auto vram_mode = Settings::values.vram_usage_mode.GetValue();
-        if (vram_mode == Settings::VramUsageMode::Conservative) {
-            // Conservative mode: Limit to 6GB + scaling memory
-            const size_t normal_memory = 6_GiB;
-            const size_t scaler_memory = 1_GiB * Settings::values.resolution_info.ScaleUp(1);
-            device_access_memory =
-                std::min<u64>(device_access_memory, normal_memory + scaler_memory);
-        }
-        // Aggressive mode uses full available VRAM (no limits)
-
         return;
     }
     const s64 available_memory = static_cast<s64>(device_access_memory - device_initial_usage);

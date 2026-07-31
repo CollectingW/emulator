@@ -39,11 +39,15 @@ BufferCache<P>::BufferCache(Tegra::MaxwellDeviceMemoryManager& device_memory_, R
     const s64 min_vacancy_expected = (6 * mem_threshold) / 10;
     const s64 min_vacancy_critical = (2 * mem_threshold) / 10;
     minimum_memory = static_cast<u64>(
-        (std::max)((std::min)(device_local_memory - min_vacancy_expected, min_spacing_expected),
-                   DEFAULT_EXPECTED_MEMORY));
+        (std::min)(device_local_memory,
+                   (std::max)((std::min)(device_local_memory - min_vacancy_expected,
+                                         min_spacing_expected),
+                              DEFAULT_EXPECTED_MEMORY)));
     critical_memory = static_cast<u64>(
-        (std::max)((std::min)(device_local_memory - min_vacancy_critical, min_spacing_critical),
-                   DEFAULT_CRITICAL_MEMORY));
+        (std::min)(device_local_memory,
+                   (std::max)((std::min)(device_local_memory - min_vacancy_critical,
+                                         min_spacing_critical),
+                              DEFAULT_CRITICAL_MEMORY)));
 }
 
 template <class P>
@@ -92,10 +96,9 @@ void BufferCache<P>::TickFrame() {
     const bool skip_preferred = hits * 256 < shots * 251;
     channel_state->uniform_buffer_skip_cache_size = skip_preferred ? DEFAULT_SKIP_CACHE_SIZE : 0;
 
-    if (runtime.CanReportMemoryUsage()) {
-        total_used_memory = runtime.GetDeviceMemoryUsage();
-    }
-    if (total_used_memory >= minimum_memory) {
+    const u64 gc_memory_usage =
+        runtime.CanReportMemoryUsage() ? runtime.GetDeviceMemoryUsage() : total_used_memory;
+    if (gc_memory_usage >= minimum_memory) {
         RunGarbageCollector();
     }
     ++frame_tick;
