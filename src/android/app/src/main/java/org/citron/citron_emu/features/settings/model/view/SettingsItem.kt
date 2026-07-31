@@ -481,6 +481,13 @@ abstract class SettingsItem(
                     descriptionId = R.string.use_conditional_rendering_description
                 )
             )
+            put(
+                SwitchSetting(
+                    BooleanSetting.ANDROID_ARM64_REGISTER_GUARDS,
+                    titleId = R.string.android_arm64_register_guards,
+                    descriptionId = R.string.android_arm64_register_guards_description
+                )
+            )
 
             // VRAM Management Settings (FIXED: VRAM leak prevention)
             put(

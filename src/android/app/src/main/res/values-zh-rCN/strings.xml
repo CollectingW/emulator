@@ -231,6 +231,8 @@
     <string name="renderer_asynchronous_shaders_description">异步编译着色器，减少卡顿，但可能引入故障。</string>
     <string name="renderer_reactive_flushing">启用反应性刷新</string>
     <string name="renderer_reactive_flushing_description">牺牲性能，提高某些游戏的渲染精度。</string>
+    <string name="android_arm64_register_guards">ARM64 驱动寄存器保护</string>
+    <string name="android_arm64_register_guards_description">保护模拟器状态免受受影响 Android GPU 驱动的寄存器损坏。仅在诊断时关闭。</string>
     <string name="use_disk_shader_cache">磁盘着色器缓存</string>
     <string name="use_disk_shader_cache_description">将生成的着色器缓存于磁盘中并进行读取，以减少卡顿。</string>
     <string name="anisotropic_filtering">各向异性过滤</string>

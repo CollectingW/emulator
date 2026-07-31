@@ -1051,6 +1051,7 @@ class SettingsFragmentPresenter(
             add(IntSetting.VRAM_USAGE_MODE.key)
             add(IntSetting.EXTENDED_DYNAMIC_STATE.key)
             add(BooleanSetting.USE_CONDITIONAL_RENDERING.key)
+            add(BooleanSetting.ANDROID_ARM64_REGISTER_GUARDS.key)
 
             add(HeaderSetting(R.string.frame_skipping_header))
             add(IntSetting.FRAME_SKIPPING.key)

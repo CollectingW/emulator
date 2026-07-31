@@ -258,6 +258,8 @@
     <string name="renderer_asynchronous_shaders_description">Compiles shaders asynchronously, reducing stutter but may introduce glitches.</string>
     <string name="renderer_reactive_flushing">Use reactive flushing</string>
     <string name="renderer_reactive_flushing_description">Improves rendering accuracy in some games at the cost of performance.</string>
+    <string name="android_arm64_register_guards">ARM64 driver register guards</string>
+    <string name="android_arm64_register_guards_description">Protects emulator state from register corruption in affected Android GPU drivers. Disable only for diagnostics.</string>
     <string name="use_disk_shader_cache">Disk shader cache</string>
     <string name="use_disk_shader_cache_description">Reduces stuttering by locally storing and loading generated shaders.</string>
     <string name="anisotropic_filtering">Anisotropic filtering</string>

@@ -9,6 +9,7 @@
 #include "common/settings.h"
 #include "core/core.h"
 #include "core/core_timing.h"
+#include "video_core/arm64_register_guard.h"
 #include "video_core/dirty_flags.h"
 #include "video_core/engines/draw_manager.h"
 #include "video_core/engines/maxwell_3d.h"
@@ -393,7 +394,7 @@ void Maxwell3D::CallMacroMethod(u32 method, const std::vector<u32>& parameters) 
     draw_manager->DrawDeferred();
 }
 
-#if defined(ANDROID) && defined(ARCHITECTURE_arm64) && defined(__clang__)
+#if CITRON_ARM64_REGISTER_GUARD_SUPPORTED
 // Macro-originated calls are enclosed by CitronMacroCallMethodPreservingRegisters. Avoid a
 // false stack-protector abort when a nested Vulkan call corrupts x29 before this epilogue.
 __attribute__((no_stack_protector))

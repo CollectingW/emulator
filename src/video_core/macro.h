@@ -189,6 +189,7 @@ struct MacroInterpreterImpl final {
     u32 next_parameter_index = 0;
     bool carry_flag = false;
     bool execution_faulted = false;
+    bool nested_macro_warning_reported = false;
 };
 struct DynamicCachedMacro {
     virtual ~DynamicCachedMacro() = default;

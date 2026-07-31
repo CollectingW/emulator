@@ -11,6 +11,7 @@ if(LIBVA_FOUND)
 endif()
 
 add_library(video_core STATIC
+    arm64_register_guard.h
     buffer_cache/buffer_base.h
     buffer_cache/buffer_cache_base.h
     buffer_cache/buffer_cache.cpp
