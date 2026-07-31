@@ -358,6 +358,9 @@ void GraphicsPipeline::ConfigureImpl(bool is_indexed) {
 
     const auto& regs{maxwell3d->regs};
     const bool via_header_index{regs.sampler_binding == Tegra::Engines::Maxwell3D::Regs::SamplerBinding::ViaHeaderBinding};
+    // Single texture-cache-wide counter; read once here rather than once per
+    // qualifying bindless descriptor per shader stage
+    const u64 image_table_generation = texture_cache.GraphicsImageTableGeneration();
     const auto config_stage{[&](size_t stage) LAMBDA_FORCEINLINE {
         const Shader::Info& info{stage_infos[stage]};
         buffer_cache.UnbindGraphicsStorageBuffers(stage);
@@ -416,43 +419,30 @@ void GraphicsPipeline::ConfigureImpl(bool is_indexed) {
             if (desc.count > 1 && !desc.has_secondary) {
                 const GPUVAddr cbuf_addr =
                     cbufs[desc.cbuf_index].address + desc.cbuf_offset;
-                const u64 image_table_generation =
-                    texture_cache.GraphicsImageTableGeneration();
-
-                // Fast path: if we have a valid cache entry whose generation
-                // matches, the TIC table hasn't been invalidated since the last
-                // check. Skip the ReadBlockUnsafe + memcmp entirely.
-                if (auto* fast = FindBindlessEntry(bindless_cache, cbuf_addr,
-                                                    desc.count,
-                                                    image_table_generation);
-                    fast != nullptr) {
-                    views.insert(views.end(), fast->cached_views.begin(),
-                                 fast->cached_views.end());
-                    samplers.insert(samplers.end(), fast->cached_samplers.begin(),
-                                    fast->cached_samplers.end());
-                    continue;
-                }
 
                 const size_t byte_size =
                     static_cast<size_t>(desc.count) << desc.size_shift;
-                bindless_scratch.resize(byte_size);
-                gpu_memory->ReadBlockUnsafe(cbuf_addr, bindless_scratch.data(), byte_size,
-                                            "Vulkan.GraphicsPipeline.bindless_cbuf");
-                BindlessCacheEntry& entry = AcquireBindlessEntry(
+                // Single scan: (addr, count, image_table_generation) match returns
+                // the existing valid entry (hit); otherwise an invalid slot claimed
+                // for filling below (miss).
+                // image_table_generation increments on every TIC table invalidation,
+                // a generation hit implies the cached views are still valid and
+                // no ReadBlockUnsafe is needed.
+                BindlessCacheEntry& entry = FindOrAcquireBindlessEntry(
                     bindless_cache, bindless_cache_rr, cbuf_addr, desc.count,
                     image_table_generation);
-                const bool hit = entry.valid &&
-                                 entry.last_bytes.size() == byte_size &&
-                                 std::memcmp(entry.last_bytes.data(),
-                                             bindless_scratch.data(),
-                                             byte_size) == 0;
-                if (hit) {
+                if (entry.valid) {
                     views.insert(views.end(), entry.cached_views.begin(),
                                  entry.cached_views.end());
                     samplers.insert(samplers.end(), entry.cached_samplers.begin(),
                                     entry.cached_samplers.end());
                     continue;
                 }
+
+                // Miss: read cbuf, resolve views, populate cache entry.
+                bindless_scratch.resize(byte_size);
+                gpu_memory->ReadBlockUnsafe(cbuf_addr, bindless_scratch.data(), byte_size,
+                                            "Vulkan.GraphicsPipeline.bindless_cbuf");
                 const size_t views_start = views.size();
                 const size_t samplers_start = samplers.size();
                 for (u32 index = 0; index < desc.count; ++index) {
@@ -467,8 +457,6 @@ void GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                                            ? VideoCommon::NULL_SAMPLER_ID
                                            : texture_cache.GetGraphicsSamplerId(handle.second));
                 }
-                entry.last_bytes.assign(bindless_scratch.begin(),
-                                        bindless_scratch.end());
                 auto resolved_views =
                     std::span(views.data() + views_start, views.size() - views_start);
                 texture_cache.FillGraphicsImageViews<false>(resolved_views);
