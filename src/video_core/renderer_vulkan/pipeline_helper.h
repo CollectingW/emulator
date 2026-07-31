@@ -338,12 +338,11 @@ struct BindlessCacheEntry {
     u32 key_count{0};
     u64 key_image_table_generation{};
     bool valid{false};
-    boost::container::small_vector<u8, 256> last_bytes;
     boost::container::small_vector<VideoCommon::ImageViewInOut, 16> cached_views;
     boost::container::small_vector<VideoCommon::SamplerId, 16> cached_samplers;
 };
 
-constexpr size_t BINDLESS_CACHE_SIZE = 64;
+constexpr size_t BINDLESS_CACHE_SIZE = 16;
 using BindlessCache = std::array<BindlessCacheEntry, BINDLESS_CACHE_SIZE>;
 
 inline BindlessCacheEntry* FindBindlessEntry(BindlessCache& cache, GPUVAddr addr, u32 count,
@@ -370,6 +369,11 @@ inline BindlessCacheEntry& AcquireBindlessEntry(BindlessCache& cache, size_t& ro
     slot.key_image_table_generation = image_table_generation;
     slot.valid = false;
     return slot;
+}
+inline BindlessCacheEntry& FindOrAcquireBindlessEntry(BindlessCache& cache, size_t& round_robin,
+                                                      GPUVAddr addr, u32 count,
+                                                      u64 image_table_generation) {
+    return AcquireBindlessEntry(cache, round_robin, addr, count, image_table_generation);
 }
 
 } // namespace Vulkan

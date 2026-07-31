@@ -308,7 +308,7 @@ public:
         } while (channel_state->has_deleted_buffers);
     }
 
-    std::recursive_mutex mutex;
+    mutable std::recursive_mutex mutex;
     Runtime& runtime;
 
 private:
@@ -347,15 +347,6 @@ private:
     void RunGarbageCollector();
 
 public:
-    /// Public interface to trigger garbage collection
-    void TriggerGarbageCollection() {
-        RunGarbageCollector();
-    }
-
-    void FlushDelayedDestructionRing() {
-        delayed_destruction_ring.Flush();
-    }
-
     // FIXED: VRAM leak prevention - Enhanced public interface for buffer VRAM management
 
     /// Get buffer VRAM usage statistics
@@ -374,11 +365,6 @@ public:
             .buffer_count = buffer_count,
             .large_buffer_count = large_buffer_count,
         };
-    }
-
-    /// Check if buffer VRAM pressure is high
-    [[nodiscard]] bool IsBufferVRAMPressureHigh() const noexcept {
-        return total_used_memory >= minimum_memory;
     }
 
     void BindHostIndexBuffer();
@@ -514,23 +500,15 @@ public:
     };
     Common::LeastRecentlyUsedCache<LRUItemParams> lru_cache;
     u64 frame_tick = 0;
-    u64 total_used_memory = 0;
+    u64 total_used_memory = 0; // Bytes owned by this cache.
     u64 minimum_memory = 0;
     u64 critical_memory = 0;
     BufferId inline_buffer_id;
 
-    u64 vram_limit_bytes = 0;
     u64 large_buffer_memory = 0;
     u64 evicted_buffer_bytes = 0;
     u32 buffer_count = 0;
     u32 large_buffer_count = 0;
-    u64 last_gc_frame = 0;
-    u32 gc_runs_this_frame = 0;
-    bool emergency_gc_triggered = false;
-    bool was_in_emergency_gc = false;
-    u64 last_emergency_gc_log_frame = 0;
-    u64 last_emergency_gc_log_usage = 0;
-    u32 emergency_gc_logs_suppressed = 0;
 
     std::array<BufferId, ((1ULL << 34) >> CACHING_PAGEBITS)> page_table;
     Common::ScratchBuffer<u8> tmp_buffer;

@@ -470,22 +470,6 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
                                VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
     }
 
-    // FIXED: Android Adreno 740 native ASTC eviction
-    // Detect Adreno GPUs and check for native ASTC support
-    is_adreno = is_qualcomm || is_turnip;
-    if (is_adreno) {
-        // Adreno 7xx series devices (Adreno 730, 740, 750+) support native ASTC
-        // Device IDs: 0x43050a01 (SD8 Gen 2), 0x43052c01 (SD8 Elite), etc.
-        // Generally 0x43050000+ indicates Adreno 7xx series
-        is_adreno_7xx_or_newer = (device_id >= 0x43050000);
-        supports_native_astc = is_adreno_7xx_or_newer && is_optimal_astc_supported;
-
-        if (supports_native_astc) {
-            LOG_INFO(Render_Vulkan,
-                     "Adreno 7xx detected — using native ASTC, eviction on compressed size");
-        }
-    }
-
     SetupFamilies(surface);
     const auto queue_cis = GetDeviceQueueCreateInfos();
 
@@ -790,7 +774,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     functions.vkGetInstanceProcAddr = dld.vkGetInstanceProcAddr;
     functions.vkGetDeviceProcAddr = dld.vkGetDeviceProcAddr;
 
-    VmaAllocatorCreateFlags allocator_flags = VMA_ALLOCATOR_CREATE_EXTERNALLY_SYNCHRONIZED_BIT;
+    VmaAllocatorCreateFlags allocator_flags{};
     if (extensions.memory_budget) {
         allocator_flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
     }
@@ -1400,15 +1384,28 @@ void Device::SetupFamilies(VkSurfaceKHR surface) {
 }
 
 u64 Device::GetDeviceMemoryUsage() const {
-    VkPhysicalDeviceMemoryBudgetPropertiesEXT budget;
-    budget.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
-    budget.pNext = nullptr;
-    physical.GetMemoryProperties(&budget);
-    u64 result{};
-    for (const size_t heap : valid_heap_memory) {
-        result += budget.heapUsage[heap];
+    return device_memory_usage.load(std::memory_order_relaxed);
+}
+
+void Device::RefreshDeviceMemoryUsage(VmaAllocator vma_allocator) const {
+    if (!extensions.memory_budget) {
+        return;
     }
-    return result;
+    std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
+    vmaGetHeapBudgets(vma_allocator, budgets.data());
+    u64 usage{};
+    u64 budget{};
+    for (const size_t heap : valid_heap_memory) {
+        usage += budgets[heap].usage;
+        budget += budgets[heap].budget;
+    }
+    device_memory_usage.store(usage, std::memory_order_relaxed);
+    device_memory_budget.store(budget, std::memory_order_relaxed);
+}
+
+u64 Device::GetDeviceMemoryBudget() const {
+    return extensions.memory_budget ? device_memory_budget.load(std::memory_order_relaxed)
+                                    : device_access_memory;
 }
 
 void Device::CollectPhysicalMemoryInfo() {
@@ -1439,19 +1436,13 @@ void Device::CollectPhysicalMemoryInfo() {
         }
         device_access_memory += mem_properties.memoryHeaps[element].size;
     }
+    device_memory_usage.store(device_initial_usage, std::memory_order_relaxed);
+    // This snapshot intentionally retains the driver's full heap budget for reporting. The
+    // emulator-specific reserve below only reduces device_access_memory, which drives cache limits.
+    device_memory_budget.store(device_access_memory, std::memory_order_relaxed);
     if (!is_integrated) {
         const u64 reserve_memory = std::min<u64>(device_access_memory / 8, 1_GiB);
         device_access_memory -= reserve_memory;
-
-        const auto vram_mode = Settings::values.vram_usage_mode.GetValue();
-        if (vram_mode == Settings::VramUsageMode::Conservative) {
-            // Conservative mode: Limit to 6GB + scaling memory
-            const size_t normal_memory = 6_GiB;
-            const size_t scaler_memory = 1_GiB * Settings::values.resolution_info.ScaleUp(1);
-            device_access_memory =
-                std::min<u64>(device_access_memory, normal_memory + scaler_memory);
-        }
-        // Aggressive mode uses full available VRAM (no limits)
 
         return;
     }

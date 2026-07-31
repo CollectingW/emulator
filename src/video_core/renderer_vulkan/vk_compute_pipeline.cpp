@@ -180,46 +180,33 @@ void ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
     for (const auto& desc : info.image_buffer_descriptors) {
         add_image(desc, false);
     }
+    const u64 image_table_generation = texture_cache.ComputeImageTableGeneration();
     for (const auto& desc : info.texture_descriptors) {
         if (desc.count > 1 && !desc.has_secondary) {
             const GPUVAddr cbuf_addr =
                 cbufs[desc.cbuf_index].Address() + desc.cbuf_offset;
-            const u64 image_table_generation = texture_cache.ComputeImageTableGeneration();
 
-            // Fast path: if we have a valid cache entry whose generation matches,
-            // the TIC table hasn't been invalidated. Skip ReadBlockUnsafe + memcmp.
-            if (auto* fast = FindBindlessEntry(bindless_cache, cbuf_addr,
-                                               desc.count, image_table_generation);
-                fast != nullptr) {
-                for (const auto& v : fast->cached_views) {
-                    views.push_back(v);
-                }
-                for (const auto& s : fast->cached_samplers) {
-                    samplers.push_back(s);
-                }
+            const size_t byte_size = static_cast<size_t>(desc.count) << desc.size_shift;
+            // Single scan: (addr, count, image_table_generation) match returns the
+            // existing valid entry (hit); otherwise an invalid slot claimed for
+            // filling below (miss).
+            // image_table_generation increments on every TIC table invalidation,
+            // a generation hit implies the cached views are still valid and no
+            // ReadBlockUnsafe is needed.
+            BindlessCacheEntry& entry = FindOrAcquireBindlessEntry(
+                bindless_cache, bindless_cache_rr, cbuf_addr, desc.count,
+                image_table_generation);
+            if (entry.valid) {
+                views.insert(views.end(), entry.cached_views.begin(), entry.cached_views.end());
+                samplers.insert(samplers.end(), entry.cached_samplers.begin(),
+                                entry.cached_samplers.end());
                 continue;
             }
 
-            const size_t byte_size = static_cast<size_t>(desc.count) << desc.size_shift;
+            // Miss: read cbuf, resolve views, populate cache entry.
             bindless_scratch.resize(byte_size);
             gpu_memory.ReadBlockUnsafe(cbuf_addr, bindless_scratch.data(), byte_size,
                                        "Vulkan.ComputePipeline.bindless_cbuf");
-            BindlessCacheEntry& entry = AcquireBindlessEntry(
-                bindless_cache, bindless_cache_rr, cbuf_addr, desc.count,
-                image_table_generation);
-            const bool hit = entry.valid &&
-                             entry.last_bytes.size() == byte_size &&
-                             std::memcmp(entry.last_bytes.data(),
-                                         bindless_scratch.data(), byte_size) == 0;
-            if (hit) {
-                for (const auto& v : entry.cached_views) {
-                    views.push_back(v);
-                }
-                for (const auto& s : entry.cached_samplers) {
-                    samplers.push_back(s);
-                }
-                continue;
-            }
             const size_t views_start = views.size();
             const size_t samplers_start = samplers.size();
             for (u32 index = 0; index < desc.count; ++index) {
@@ -233,7 +220,6 @@ void ComputePipeline::Configure(Tegra::Engines::KeplerCompute& kepler_compute,
                                        ? VideoCommon::NULL_SAMPLER_ID
                                        : texture_cache.GetComputeSamplerId(handle.second));
             }
-            entry.last_bytes.assign(bindless_scratch.begin(), bindless_scratch.end());
             auto resolved_views =
                 std::span(views.data() + views_start, views.size() - views_start);
             texture_cache.FillComputeImageViews(resolved_views);
