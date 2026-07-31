@@ -2332,6 +2332,8 @@ void GMainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletP
 
     current_title_id = title_id; // Store ID safely
 
+    OfferNextendoByamlDownload(title_id);
+
     if (type == StartGameType::Normal) {
         // Load per game settings if it is a normal boot
         const auto file_path =
@@ -6981,5 +6983,142 @@ void GMainWindow::SyncNextendoHistory() {
 
     // Detached: shutdown must not block on the network.
     std::thread{[entry] { WebService::NextendoApi::SyncHistory({entry}); }}.detach();
+#endif
+}
+
+bool GMainWindow::NextendoByamlRequired(u64 title_id) const {
+    switch (title_id) {
+    case 0x0100f8f0000a2000ULL: // Splatoon 2
+    case 0x01003bc0000a0000ULL: // Splatoon 2
+    case 0x01003c700009c800ULL: // Splatoon 2
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool GMainWindow::NextendoByamlInstalled(u64 title_id) const {
+    const auto path = Common::FS::GetCitronPath(Common::FS::CitronPath::NANDDir) /
+                      fmt::format("system/save/bcat/{:016X}/vsdata/VSSetting_0.byaml", title_id);
+    return std::filesystem::exists(path);
+}
+
+bool GMainWindow::NextendoByamlSkipped(u64 title_id) const {
+    const auto skip_path =
+        Common::FS::GetCitronPath(Common::FS::CitronPath::ConfigDir) / "nextendo_byaml_skip.txt";
+    std::ifstream file{skip_path};
+    if (!file) {
+        return false;
+    }
+    const auto needle = fmt::format("{:016X}", title_id);
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line == needle) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void GMainWindow::NextendoByamlMarkSkipped(u64 title_id) const {
+    const auto skip_path =
+        Common::FS::GetCitronPath(Common::FS::CitronPath::ConfigDir) / "nextendo_byaml_skip.txt";
+    std::ofstream file{skip_path, std::ios::app};
+    if (file) {
+        file << fmt::format("{:016X}", title_id) << "\n";
+    }
+}
+
+bool GMainWindow::NextendoByamlDownload(u64 title_id) {
+#ifdef ENABLE_WEB_SERVICE
+    const auto title_id_hex = fmt::format("{:016X}", title_id);
+    const auto zip_bytes = WebService::NextendoApi::DownloadBcatSeed(title_id_hex);
+    if (zip_bytes.empty()) {
+        return false;
+    }
+
+    const auto tmp_path = Common::FS::GetCitronPath(Common::FS::CitronPath::CacheDir) /
+                          fmt::format("nextendo_byaml_{}.zip", title_id_hex);
+    {
+        std::ofstream out{tmp_path, std::ios::binary};
+        if (!out) {
+            return false;
+        }
+        out.write(reinterpret_cast<const char*>(zip_bytes.data()),
+                  static_cast<std::streamsize>(zip_bytes.size()));
+    }
+
+    const auto dest_path =
+        Common::FS::GetCitronPath(Common::FS::CitronPath::NANDDir) /
+        fmt::format("system/save/bcat/{}", title_id_hex);
+
+    const bool ok = ExtractZipToDirectory(tmp_path, dest_path);
+    std::filesystem::remove(tmp_path);
+    return ok;
+#else
+    return false;
+#endif
+}
+
+void GMainWindow::RunNextendoByamlDownloadWithProgress(u64 title_id) {
+#ifdef ENABLE_WEB_SERVICE
+    QProgressDialog progress(tr("Downloading online schedule..."), QString{}, 0, 0, this);
+    progress.setWindowModality(Qt::WindowModal);
+    progress.setCancelButton(nullptr);
+    progress.show();
+
+    auto future = QtConcurrent::run([this, title_id] { return NextendoByamlDownload(title_id); });
+    while (!future.isFinished()) {
+        QCoreApplication::processEvents();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    progress.close();
+
+    if (future.result()) {
+        QMessageBox::information(this, tr("Nextendo Network"), tr("Online schedule installed."));
+    } else {
+        QMessageBox::warning(this, tr("Nextendo Network"),
+                             tr("Failed to download the online schedule. You can try again later "
+                                "via right-click on the game."));
+    }
+#endif
+}
+
+void GMainWindow::NextendoByamlDownloadFromMenu(u64 title_id) {
+#ifdef ENABLE_WEB_SERVICE
+    RunNextendoByamlDownloadWithProgress(title_id);
+#endif
+}
+
+void GMainWindow::OfferNextendoByamlDownload(u64 title_id) {
+#ifdef ENABLE_WEB_SERVICE
+    if (!NextendoByamlRequired(title_id) || NextendoByamlInstalled(title_id) ||
+        NextendoByamlSkipped(title_id)) {
+        return;
+    }
+
+    QMessageBox ask(this);
+    ask.setWindowTitle(tr("Nextendo Network"));
+    ask.setText(tr("This game needs the online schedule (Nextendo Network)."));
+    ask.setInformativeText(
+        tr("This file (stage/mode/festival schedules) is required to play online and is NOT "
+           "included with the emulator. It can be downloaded from Nextendo Network servers and "
+           "installed automatically.\n\nWithout it, the game stays stuck \"offline\". "
+           "(Re-downloadable later via right-click on the game.)"));
+    QPushButton* yes_button = ask.addButton(tr("Yes, download"), QMessageBox::AcceptRole);
+    ask.addButton(tr("No"), QMessageBox::RejectRole);
+    QPushButton* skip_button = ask.addButton(tr("Don't ask again"), QMessageBox::DestructiveRole);
+    ask.setDefaultButton(yes_button);
+    ask.exec();
+
+    if (ask.clickedButton() == skip_button) {
+        NextendoByamlMarkSkipped(title_id);
+        return;
+    }
+    if (ask.clickedButton() != yes_button) {
+        return;
+    }
+
+    RunNextendoByamlDownloadWithProgress(title_id);
 #endif
 }

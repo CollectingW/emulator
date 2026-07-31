@@ -25,9 +25,6 @@ ConfigureNetwork::ConfigureNetwork(const Core::System& system_, QWidget* parent)
     : QWidget(parent), ui(std::make_unique<Ui::ConfigureNetwork>()), system{system_} {
     ui->setupUi(this);
 
-    ui->nextendo_server_ip->setEchoMode(QLineEdit::Password);
-    ui->nextendo_nat_ip->setEchoMode(QLineEdit::Password);
-
     ui->network_interface->addItem(tr("None"));
     for (const auto& iface : Network::GetAvailableNetworkInterfaces()) {
         ui->network_interface->addItem(QString::fromStdString(iface.name));
@@ -64,8 +61,6 @@ void ConfigureNetwork::ApplyConfiguration() {
     Settings::values.lobby_api_url = ui->lobby_api_url->text().toStdString();
 
     Settings::values.enable_nextendo = ui->enable_nextendo->isChecked();
-    Settings::values.nextendo_server_ip = ui->nextendo_server_ip->text().toStdString();
-    Settings::values.nextendo_nat_ip = ui->nextendo_nat_ip->text().toStdString();
 }
 
 void ConfigureNetwork::changeEvent(QEvent* event) {
@@ -91,8 +86,6 @@ void ConfigureNetwork::SetConfiguration() {
     ui->lobby_api_url->setText(QString::fromStdString(Settings::values.lobby_api_url.GetValue()));
 
     ui->enable_nextendo->setChecked(Settings::values.enable_nextendo.GetValue());
-    ui->nextendo_server_ip->setText(QString::fromStdString(Settings::values.nextendo_server_ip.GetValue()));
-    ui->nextendo_nat_ip->setText(QString::fromStdString(Settings::values.nextendo_nat_ip.GetValue()));
 
     const bool networking_enabled = runtime_lock && !ui->airplane_mode->isChecked();
     ui->network_interface->setEnabled(networking_enabled);

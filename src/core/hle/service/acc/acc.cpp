@@ -125,9 +125,48 @@ EVP_PKEY* GetBaasSigningKey() {
             }
         }
 
+        // No key supplied: reuse a persisted auto-generated one so the identity (and its
+        // public JWK) stays stable across launches instead of a fresh key every process start.
+        const auto auto_key_path =
+            Common::FS::GetCitronPath(Common::FS::CitronPath::KeysDir) / "nextendo_baas_auto.pem";
+        if (const auto existing =
+                Common::FS::ReadStringFromFile(auto_key_path, Common::FS::FileType::TextFile);
+            existing.find("BEGIN") != std::string::npos) {
+            BIO* bio = BIO_new_mem_buf(existing.data(), static_cast<int>(existing.size()));
+            if (bio) {
+                EVP_PKEY* loaded = PEM_read_bio_PrivateKey(bio, nullptr, nullptr, nullptr);
+                BIO_free(bio);
+                if (loaded) {
+                    LOG_DEBUG(Service_ACC, "[Nextendo] Using the persisted auto-generated BAAS signing key");
+                    return loaded;
+                }
+            }
+        }
+
         EVP_PKEY* generated = EVP_RSA_gen(2048);
         if (!generated) {
             LOG_ERROR(Service_ACC, "[Nextendo] Failed to generate a BAAS signing key");
+            return generated;
+        }
+
+        BIO* out_bio = BIO_new(BIO_s_mem());
+        if (out_bio && PEM_write_bio_PrivateKey(out_bio, generated, nullptr, nullptr, 0, nullptr,
+                                                nullptr)) {
+            char* data = nullptr;
+            const long len = BIO_get_mem_data(out_bio, &data);
+            if (len > 0 && data) {
+                const auto written = Common::FS::WriteStringToFile(
+                    auto_key_path, Common::FS::FileType::TextFile,
+                    std::string_view{data, static_cast<size_t>(len)});
+                if (written > 0) {
+                    LOG_DEBUG(Service_ACC,
+                             "[Nextendo] Generated and persisted a new BAAS signing key at {}",
+                             auto_key_path.string());
+                }
+            }
+        }
+        if (out_bio) {
+            BIO_free(out_bio);
         }
         return generated;
     }();
@@ -1154,7 +1193,7 @@ public:
 };
 
 void Module::Interface::GetUserCount(HLERequestContext& ctx) {
-    LOG_DEBUG(Service_ACC, "called");
+    LOG_DEBUG(Service_ACC, "called, user_count={}", profile_manager->GetUserCount());
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
     rb.Push<u32>(static_cast<u32>(profile_manager->GetUserCount()));
@@ -1163,15 +1202,16 @@ void Module::Interface::GetUserCount(HLERequestContext& ctx) {
 void Module::Interface::GetUserExistence(HLERequestContext& ctx) {
     IPC::RequestParser rp{ctx};
     Common::UUID user_id = rp.PopRaw<Common::UUID>();
-    LOG_DEBUG(Service_ACC, "called user_id=0x{}", user_id.RawString());
+    const bool exists = profile_manager->UserExists(user_id);
+    LOG_DEBUG(Service_ACC, "called user_id=0x{}, exists={}", user_id.RawString(), exists);
 
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
-    rb.Push(profile_manager->UserExists(user_id));
+    rb.Push(exists);
 }
 
 void Module::Interface::ListAllUsers(HLERequestContext& ctx) {
-    LOG_DEBUG(Service_ACC, "called");
+    LOG_DEBUG(Service_ACC, "called, user_count={}", profile_manager->GetUserCount());
     ctx.WriteBuffer(profile_manager->GetAllUsers());
     IPC::ResponseBuilder rb{ctx, 2};
     rb.Push(ResultSuccess);
@@ -1185,7 +1225,7 @@ void Module::Interface::ListOpenUsers(HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetLastOpenedUser(HLERequestContext& ctx) {
-    LOG_DEBUG(Service_ACC, "called");
+    LOG_DEBUG(Service_ACC, "called, uuid=0x{}", profile_manager->GetLastOpenedUser().RawString());
     IPC::ResponseBuilder rb{ctx, 6};
     rb.Push(ResultSuccess);
     rb.PushRaw<Common::UUID>(profile_manager->GetLastOpenedUser());
@@ -1493,11 +1533,13 @@ void Module::Interface::StoreSaveDataThumbnail(HLERequestContext& ctx, const Com
 }
 
 void Module::Interface::TrySelectUserWithoutInteraction(HLERequestContext& ctx) {
-    LOG_DEBUG(Service_ACC, "called");
-    // A u8 is passed into this function which we can safely ignore. It's to determine if we have
-    // access to use the network or not by the looks of it
+    IPC::RequestParser rp{ctx};
+    const auto is_network_service_account_required = rp.Pop<bool>();
+    LOG_DEBUG(Service_ACC, "called, is_network_service_account_required={}, user_count={}",
+             is_network_service_account_required, profile_manager->GetUserCount());
     IPC::ResponseBuilder rb{ctx, 6};
     if (profile_manager->GetUserCount() != 1) {
+        LOG_DEBUG(Service_ACC, "-> ResultSuccess w/ InvalidUUID (user_count != 1)");
         rb.Push(ResultSuccess);
         rb.PushRaw(Common::InvalidUUID);
         return;
@@ -1505,12 +1547,14 @@ void Module::Interface::TrySelectUserWithoutInteraction(HLERequestContext& ctx) 
 
     const auto user_list = profile_manager->GetAllUsers();
     if (std::ranges::all_of(user_list, [](const auto& user) { return user.IsInvalid(); })) {
+        LOG_DEBUG(Service_ACC, "-> ResultUnknown (all users invalid)");
         rb.Push(ResultUnknown); // TODO(ogniK): Find the correct error code
         rb.PushRaw(Common::InvalidUUID);
         return;
     }
 
     // Select the first user we have
+    LOG_DEBUG(Service_ACC, "-> ResultSuccess uuid=0x{}", profile_manager->GetUser(0)->RawString());
     rb.Push(ResultSuccess);
     rb.PushRaw(profile_manager->GetUser(0)->uuid);
 }

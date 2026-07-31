@@ -342,6 +342,22 @@ OnlineStatus GetOnlineStatus() {
 
 
 
+std::vector<u8> DownloadBcatSeed(const std::string& title_id_hex) {
+    const std::string token = Common::NextendoAccount::GetToken();
+    const auto result = Send("GET", "/api/bcat/" + title_id_hex, {}, token);
+
+    if (ClearSessionIfRejected(result)) {
+        return {};
+    }
+    if (!result || result->status != 200) {
+        LOG_WARNING(WebService, "Nextendo BCAT seed download failed (HTTP {})",
+                    result ? result->status : 0);
+        return {};
+    }
+
+    return std::vector<u8>(result->body.begin(), result->body.end());
+}
+
 void SyncHistory(const std::vector<HistoryEntry>& entries) {
     const std::string token = Common::NextendoAccount::GetToken();
     if (token.empty() || entries.empty()) {

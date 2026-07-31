@@ -9,6 +9,7 @@
 #include "common/hex_util.h"
 #include "common/string_util.h"
 
+#include "core/hle/service/sockets/sfdnsres.h"
 #include "core/hle/service/ssl/ssl_backend.h"
 #include "core/internal_network/network.h"
 #include "core/internal_network/sockets.h"
@@ -83,7 +84,23 @@ public:
     }
 
     Result SetHostName(const std::string& hostname_in) override {
-        hostname = hostname_in;
+        std::string effective_host = hostname_in;
+        if (socket) {
+            auto [peer_addr, err] = socket->GetPeerName();
+            if (err == Network::Errno::SUCCESS) {
+                std::string ip_str = Network::IPv4AddressToString(peer_addr.ip);
+                // Some titles pass the redirected IP itself instead of leaving this empty.
+                if (effective_host.empty() || effective_host == ip_str) {
+                    std::string last_host = Service::Sockets::GetLastHostForIp(ip_str);
+                    if (!last_host.empty()) {
+                        effective_host = last_host;
+                        LOG_INFO(Service_SSL, "[Nextendo] Recovered host '{}' for IP {}",
+                                 effective_host, ip_str);
+                    }
+                }
+            }
+        }
+        hostname = effective_host;
         return ResultSuccess;
     }
 

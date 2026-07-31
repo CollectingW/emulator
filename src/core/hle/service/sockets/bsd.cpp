@@ -978,11 +978,12 @@ Errno BSD::ConnectImpl(s32 fd, std::span<const u8> addr) {
 
     UNIMPLEMENTED_IF(addr.size() != sizeof(SockAddrIn));
     auto addr_in = GetValue<SockAddrIn>(addr);
+    const auto translated_addr = Translate(addr_in);
 
     LOG_INFO(Service, "Connect fd={} to {}:{}", fd, Network::IPv4AddressToString(addr_in.ip),
-             addr_in.portno);
+             translated_addr.portno);
 
-    const auto result = Translate(file_descriptors[fd]->socket->Connect(Translate(addr_in)));
+    const auto result = Translate(file_descriptors[fd]->socket->Connect(translated_addr));
     if (result == Errno::SUCCESS || result == Errno::INPROGRESS) {
         file_descriptors[fd]->connected = true;
     }

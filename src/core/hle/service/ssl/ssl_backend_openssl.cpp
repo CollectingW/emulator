@@ -89,18 +89,21 @@ public:
         if (pos != std::string::npos) {
             effective_host.replace(pos, 1, "lp1");
         }
-        if (effective_host.empty() && socket) {
+        if (socket) {
             auto [peer_addr, err] = socket->GetPeerName();
             if (err == Network::Errno::SUCCESS) {
                 std::string ip_str = Network::IPv4AddressToString(peer_addr.ip);
-                std::string last_host = Service::Sockets::GetLastHostForIp(ip_str);
-                if (!last_host.empty()) {
-                    effective_host = last_host;
-                    auto pos2 = effective_host.find('%');
-                    if (pos2 != std::string::npos) {
-                        effective_host.replace(pos2, 1, "lp1");
+                // Some titles pass the redirected IP itself instead of leaving this empty.
+                if (effective_host.empty() || effective_host == ip_str) {
+                    std::string last_host = Service::Sockets::GetLastHostForIp(ip_str);
+                    if (!last_host.empty()) {
+                        effective_host = last_host;
+                        auto pos2 = effective_host.find('%');
+                        if (pos2 != std::string::npos) {
+                            effective_host.replace(pos2, 1, "lp1");
+                        }
+                        LOG_INFO(Service_SSL, "[Nextendo] Recovered host '{}' for IP {}", effective_host, ip_str);
                     }
-                    LOG_INFO(Service_SSL, "[Nextendo] Recovered host '{}' for IP {}", effective_host, ip_str);
                 }
             }
         }

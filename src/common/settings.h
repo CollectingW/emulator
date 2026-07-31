@@ -731,8 +731,10 @@ struct Values {
     Setting<std::string> lobby_api_url{linkage, "api.ynet-fun.xyz", "lobby_api_url",
                                        Category::Network};
     Setting<bool> enable_nextendo{linkage, false, "enable_nextendo", Category::Network};
-    Setting<std::string> nextendo_server_ip{linkage, "", "nextendo_server_ip", Category::Network};
-    Setting<std::string> nextendo_nat_ip{linkage, "", "nextendo_nat_ip", Category::Network};
+    Setting<std::string> nextendo_server_ip{linkage, "51.178.29.194", "nextendo_server_ip",
+                                            Category::Network};
+    Setting<std::string> nextendo_nat_ip{linkage, "164.132.111.120", "nextendo_nat_ip",
+                                         Category::Network};
     Setting<std::string> nextendo_pid{linkage, "", "nextendo_pid", Category::Network};
 
     // WebService

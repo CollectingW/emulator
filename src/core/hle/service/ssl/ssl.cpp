@@ -255,15 +255,19 @@ private:
         size_t actual_size{};
         Result res = backend->Read(&actual_size, *out_data);
         if (res != ResultSuccess) {
+            LOG_DEBUG(Service_SSL, "Read failed, res={}", res.raw);
             return res;
         }
         out_data->resize(actual_size);
+        LOG_DEBUG(Service_SSL, "Read {} bytes", actual_size);
         return res;
     }
 
     Result WriteImpl(size_t* out_size, std::span<const u8> data) {
         ASSERT_OR_EXECUTE(did_handshake, { return ResultInternalError; });
-        return backend->Write(out_size, data);
+        const Result res = backend->Write(out_size, data);
+        LOG_DEBUG(Service_SSL, "Write {} bytes, res={}", *out_size, res.raw);
+        return res;
     }
 
     Result PendingImpl(s32* out_pending) {

@@ -81,41 +81,7 @@
           </property>
          </widget>
         </item>
-        <item row="1" column="0">
-         <widget class="QLabel" name="label_nextendo_server">
-          <property name="text">
-           <string>Nextendo Server IP</string>
-          </property>
-         </widget>
-        </item>
-        <item row="1" column="1">
-         <widget class="QLineEdit" name="nextendo_server_ip">
-          <property name="echoMode">
-           <enum>QLineEdit::Password</enum>
-          </property>
-          <property name="placeholderText">
-           <string>nextendo.network</string>
-          </property>
-         </widget>
-        </item>
-        <item row="2" column="0">
-         <widget class="QLabel" name="label_nextendo_nat">
-          <property name="text">
-           <string>Nextendo NAT Server IP</string>
-          </property>
-         </widget>
-        </item>
-        <item row="2" column="1">
-         <widget class="QLineEdit" name="nextendo_nat_ip">
-          <property name="echoMode">
-           <enum>QLineEdit::Password</enum>
-          </property>
-          <property name="placeholderText">
-           <string>nextendo.network</string>
-          </property>
-         </widget>
-        </item>
-        <item row="3" column="0" colspan="2">
+        <item row="1" column="0" colspan="2">
          <layout class="QHBoxLayout" name="layout_nextendo_auth">
           <item>
            <widget class="QPushButton" name="nextendo_login_button">
@@ -153,7 +119,7 @@
           </item>
          </layout>
         </item>
-        <item row="4" column="0" colspan="2">
+        <item row="2" column="0" colspan="2">
          <widget class="QLabel" name="nextendo_status">
           <property name="text">
            <string/>
