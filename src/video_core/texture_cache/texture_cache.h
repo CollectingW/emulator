@@ -50,74 +50,25 @@ TextureCache<P>::TextureCache(Runtime& runtime_, Tegra::MaxwellDeviceMemoryManag
     void(slot_image_views.insert(runtime, NullImageViewParams{}));
     void(slot_samplers.insert(runtime, sampler_descriptor));
 
-    // FIXED: VRAM leak prevention - Initialize VRAM limit from settings
-    const u32 configured_limit_mb = Settings::values.vram_limit_mb.GetValue();
-
     if constexpr (HAS_DEVICE_MEMORY_INFO) {
         const s64 device_local_memory = static_cast<s64>(runtime.GetDeviceLocalMemory());
-
-        // FIXED: VRAM leak prevention - Use configured limit or auto-detect (80% of VRAM)
-        if (configured_limit_mb > 0) {
-            vram_limit_bytes = static_cast<u64>(configured_limit_mb) * 1_MiB;
-        } else {
-            // Auto-detect: use 80% of available VRAM as limit
-            vram_limit_bytes = static_cast<u64>(static_cast<double>(device_local_memory) * 0.80);
-        }
-
-        // Adjust thresholds based on VRAM limit and GC aggressiveness setting
-        const auto gc_level = Settings::values.gc_aggressiveness.GetValue();
-        f32 expected_ratio = 0.6f;
-        f32 critical_ratio = 0.8f;
-
-        switch (gc_level) {
-        case Settings::GCAggressiveness::Off:
-            expected_ratio = 0.95f;
-            critical_ratio = 0.99f;
-            break;
-        case Settings::GCAggressiveness::Light:
-        default:
-            expected_ratio = 0.75f;
-            critical_ratio = 0.90f;
-            break;
-        }
-
-        expected_memory = static_cast<u64>(static_cast<f32>(vram_limit_bytes) * expected_ratio);
-        critical_memory = static_cast<u64>(static_cast<f32>(vram_limit_bytes) * critical_ratio);
-        minimum_memory = static_cast<u64>(static_cast<f32>(vram_limit_bytes) * 0.25f);
-
-        LOG_INFO(Render_Vulkan,
-                 "VRAM Management initialized: limit={}MB, expected={}MB, critical={}MB, gc_level={}",
-                 vram_limit_bytes / 1_MiB, expected_memory / 1_MiB, critical_memory / 1_MiB,
-                 static_cast<u32>(gc_level));
-
-        // FIXED: Android Adreno 740 native ASTC eviction
-        // Determine eviction strategy based on android_astc_mode setting and device capabilities
-        const auto astc_mode = Settings::values.android_astc_mode.GetValue();
-        if (astc_mode == Settings::AndroidAstcMode::Native) {
-            use_compressed_eviction = true;
-        } else if (astc_mode == Settings::AndroidAstcMode::Decompress) {
-            use_compressed_eviction = false;
-        } else {
-            // Auto mode: detect based on runtime device capabilities
-            use_compressed_eviction = runtime.SupportsNativeAstc();
-        }
-
-        if (use_compressed_eviction) {
-            // Android devices with native ASTC can use higher VRAM budget (90% instead of 80%)
-            // since textures stay compressed in GPU memory
-            const u64 android_vram_limit = static_cast<u64>(static_cast<double>(runtime.GetDeviceLocalMemory()) * 0.90);
-            if (configured_limit_mb == 0 && android_vram_limit > vram_limit_bytes) {
-                vram_limit_bytes = android_vram_limit;
-                expected_memory = static_cast<u64>(static_cast<f32>(vram_limit_bytes) * expected_ratio);
-                critical_memory = static_cast<u64>(static_cast<f32>(vram_limit_bytes) * critical_ratio);
-            }
-            LOG_INFO(Render_Vulkan,
-                     "Android native ASTC enabled: using compressed size eviction, VRAM budget={}MB",
-                     vram_limit_bytes / 1_MiB);
-        }
+        const s64 min_spacing_expected = device_local_memory - 1_GiB;
+        const s64 min_spacing_critical = device_local_memory - 512_MiB;
+        const s64 mem_threshold = (std::min)(device_local_memory, TARGET_THRESHOLD);
+        const s64 min_vacancy_expected = (6 * mem_threshold) / 10;
+        const s64 min_vacancy_critical = (2 * mem_threshold) / 10;
+        expected_memory = static_cast<u64>(
+            (std::min)(device_local_memory,
+                       (std::max)((std::min)(device_local_memory - min_vacancy_expected,
+                                             min_spacing_expected),
+                                  DEFAULT_EXPECTED_MEMORY)));
+        critical_memory = static_cast<u64>(
+            (std::min)(device_local_memory,
+                       (std::max)((std::min)(device_local_memory - min_vacancy_critical,
+                                             min_spacing_critical),
+                                  DEFAULT_CRITICAL_MEMORY)));
+        minimum_memory = static_cast<u64>((device_local_memory - mem_threshold) / 2);
     } else {
-        vram_limit_bytes = configured_limit_mb > 0 ? static_cast<u64>(configured_limit_mb) * 1_MiB
-                                                    : 6_GiB; // Default 6GB if no info
         expected_memory = DEFAULT_EXPECTED_MEMORY + 512_MiB;
         critical_memory = DEFAULT_CRITICAL_MEMORY + 1_GiB;
         minimum_memory = 0;
@@ -175,42 +126,18 @@ void TextureCache<P>::RunGarbageCollector() {
         }
         UnregisterImage(image_id);
         DeleteImage(image_id, image.scale_tick > frame_tick + 5);
-
-        if (total_used_memory < critical_memory) {
-            if (aggressive_mode) {
-                num_iterations >>= 2;
-                aggressive_mode = false;
-                return false;
-            }
-            if (high_priority_mode && total_used_memory < expected_memory) {
-                num_iterations >>= 1;
-                high_priority_mode = false;
-            }
+        if (aggressive_mode && total_used_memory < critical_memory) {
+            num_iterations >>= 2;
+            aggressive_mode = false;
+        } else if (high_priority_mode && total_used_memory < expected_memory) {
+            num_iterations >>= 1;
+            high_priority_mode = false;
         }
         return false;
     };
 
-    if (total_used_memory >= expected_memory) {
-        lru_cache.ForEachItemBelow(frame_tick, [this](ImageId image_id) {
-            auto& image = slot_images[image_id];
-            if (True(image.flags & ImageFlagBits::Sparse) &&
-                !True(image.flags & ImageFlagBits::IsDecoding)) {
-                const u64 image_size = std::max(image.guest_size_bytes, image.unswizzled_size_bytes);
-                if (image_size >= 256_MiB) {
-                    if (True(image.flags & ImageFlagBits::Tracked)) {
-                        UntrackImage(image, image_id);
-                    }
-                    UnregisterImage(image_id);
-                    DeleteImage(image_id, true);
-                }
-            }
-            return false;
-        });
-    }
-
     Configure(false);
     lru_cache.ForEachItemBelow(frame_tick - ticks_to_destroy, Cleanup);
-
     if (total_used_memory >= critical_memory) {
         Configure(true);
         lru_cache.ForEachItemBelow(frame_tick - ticks_to_destroy, Cleanup);
@@ -219,13 +146,10 @@ void TextureCache<P>::RunGarbageCollector() {
 
 template <class P>
 void TextureCache<P>::TickFrame() {
-    if (Settings::values.gc_aggressiveness.GetValue() != Settings::GCAggressiveness::Off) {
-        if (runtime.CanReportMemoryUsage()) {
-            total_used_memory = runtime.GetDeviceMemoryUsage();
-        }
-        if (total_used_memory > minimum_memory) {
-            RunGarbageCollector();
-        }
+    const u64 gc_memory_usage =
+        runtime.CanReportMemoryUsage() ? runtime.GetDeviceMemoryUsage() : total_used_memory;
+    if (gc_memory_usage > minimum_memory) {
+        RunGarbageCollector();
     }
     sentenced_images.Tick();
     sentenced_framebuffers.Tick();
@@ -243,32 +167,8 @@ void TextureCache<P>::TickFrame() {
     }
 }
 
-// FIXED: VRAM leak prevention - Implementation of new VRAM management methods
-
-template <class P>
-void TextureCache<P>::ForceEmergencyGC() {
-    LOG_WARNING(Render_Vulkan, "Force emergency GC triggered: usage={}MB, limit={}MB",
-                total_used_memory / 1_MiB, vram_limit_bytes / 1_MiB);
-
-    emergency_gc_triggered = true;
-    u64 bytes_freed = 0;
-
-    // Evict 10% of textures immediately, prioritizing sparse and large textures
-    const u64 target_bytes = total_used_memory / 10;
-    bytes_freed += EvictSparseTexturesPriority(target_bytes / 2);
-    bytes_freed += EvictToFreeMemory(target_bytes - bytes_freed);
-
-    evicted_this_frame += bytes_freed;
-    evicted_total += bytes_freed;
-
-    LOG_INFO(Render_Vulkan, "Emergency GC freed {}MB", bytes_freed / 1_MiB);
-}
-
 template <class P>
 typename TextureCache<P>::VRAMStats TextureCache<P>::GetVRAMStats() const noexcept {
-    const f32 usage_ratio = vram_limit_bytes > 0
-                                ? static_cast<f32>(total_used_memory) / static_cast<f32>(vram_limit_bytes)
-                                : 0.0f;
     return VRAMStats{
         .total_used_bytes = total_used_memory,
         .texture_bytes = total_used_memory - sparse_texture_memory,
@@ -277,133 +177,7 @@ typename TextureCache<P>::VRAMStats TextureCache<P>::GetVRAMStats() const noexce
         .evicted_total = evicted_total,
         .texture_count = texture_count,
         .sparse_texture_count = sparse_texture_count,
-        .usage_ratio = usage_ratio,
     };
-}
-
-template <class P>
-void TextureCache<P>::SetVRAMLimit(u64 limit_bytes) {
-    vram_limit_bytes = limit_bytes;
-
-    // Recalculate thresholds
-    const auto gc_level = Settings::values.gc_aggressiveness.GetValue();
-    f32 expected_ratio = 0.6f;
-    f32 critical_ratio = 0.8f;
-
-    switch (gc_level) {
-    case Settings::GCAggressiveness::Off:
-        expected_ratio = 0.95f;
-        critical_ratio = 0.99f;
-        break;
-    case Settings::GCAggressiveness::Light:
-    default:
-        expected_ratio = 0.75f;
-        critical_ratio = 0.90f;
-        break;
-    }
-
-    expected_memory = static_cast<u64>(static_cast<f32>(vram_limit_bytes) * expected_ratio);
-    critical_memory = static_cast<u64>(static_cast<f32>(vram_limit_bytes) * critical_ratio);
-    minimum_memory = static_cast<u64>(static_cast<f32>(vram_limit_bytes) * 0.25f);
-
-    LOG_INFO(Render_Vulkan, "VRAM limit updated: {}MB, expected={}MB, critical={}MB",
-             vram_limit_bytes / 1_MiB, expected_memory / 1_MiB, critical_memory / 1_MiB);
-}
-
-template <class P>
-bool TextureCache<P>::IsVRAMPressureHigh() const noexcept {
-    return total_used_memory >= expected_memory;
-}
-
-template <class P>
-bool TextureCache<P>::IsVRAMPressureCritical() const noexcept {
-    return total_used_memory >= static_cast<u64>(static_cast<f32>(vram_limit_bytes) * VRAM_USAGE_EMERGENCY_THRESHOLD);
-}
-
-template <class P>
-u64 TextureCache<P>::EvictToFreeMemory(u64 target_bytes) {
-    u64 bytes_freed = 0;
-    const u64 start_memory = total_used_memory;
-
-    lru_cache.ForEachItemBelow(frame_tick, [this, &bytes_freed, target_bytes](ImageId image_id) {
-        if (bytes_freed >= target_bytes) {
-            return true;
-        }
-
-        auto& image = slot_images[image_id];
-        if (True(image.flags & ImageFlagBits::IsDecoding)) {
-            return false;
-        }
-
-        // FIXED: Android Adreno 740 native ASTC eviction
-        // Use compressed size for eviction on Android with native ASTC support
-        const u64 image_size = use_compressed_eviction
-            ? image.compressed_size_bytes
-            : std::max(image.guest_size_bytes, image.unswizzled_size_bytes);
-
-        if (True(image.flags & ImageFlagBits::Tracked)) {
-            UntrackImage(image, image_id);
-        }
-        UnregisterImage(image_id);
-        DeleteImage(image_id, false);
-
-        bytes_freed += Common::AlignUp(image_size, 1024);
-        return false;
-    });
-
-    return start_memory - total_used_memory;
-}
-
-template <class P>
-u64 TextureCache<P>::EvictSparseTexturesPriority(u64 target_bytes) {
-    if (!Settings::values.sparse_texture_priority_eviction.GetValue()) {
-        return 0;
-    }
-
-    u64 bytes_freed = 0;
-
-    // Collect sparse textures and sort by size (largest first)
-    std::vector<std::pair<ImageId, u64>> sparse_textures;
-    lru_cache.ForEachItemBelow(frame_tick, [this, &sparse_textures](ImageId image_id) {
-        auto& image = slot_images[image_id];
-        if (True(image.flags & ImageFlagBits::Sparse) &&
-            False(image.flags & ImageFlagBits::IsDecoding)) {
-            // FIXED: Android Adreno 740 native ASTC eviction
-            // Use compressed size for eviction on Android with native ASTC support
-            const u64 size = use_compressed_eviction
-                ? image.compressed_size_bytes
-                : std::max(image.guest_size_bytes, image.unswizzled_size_bytes);
-            sparse_textures.emplace_back(image_id, size);
-        }
-        return false;
-    });
-
-    // Sort by size descending (largest first for priority eviction)
-    std::sort(sparse_textures.begin(), sparse_textures.end(),
-              [](const auto& a, const auto& b) { return a.second > b.second; });
-
-    for (const auto& [image_id, size] : sparse_textures) {
-        if (bytes_freed >= target_bytes) {
-            break;
-        }
-
-        auto& image = slot_images[image_id];
-        if (True(image.flags & ImageFlagBits::Tracked)) {
-            UntrackImage(image, image_id);
-        }
-        UnregisterImage(image_id);
-        DeleteImage(image_id, false);
-
-        bytes_freed += Common::AlignUp(size, 1024);
-        --sparse_texture_count;
-        sparse_texture_memory -= Common::AlignUp(size, 1024);
-    }
-
-    if (bytes_freed > 0) {
-        LOG_DEBUG(Render_Vulkan, "Sparse texture priority eviction freed {}MB", bytes_freed / 1_MiB);
-    }
-
-    return bytes_freed;
 }
 
 template <class P>
@@ -1625,7 +1399,8 @@ bool TextureCache<P>::ScaleUp(Image& image) {
         return false;
     }
     if (!has_copy) {
-        total_used_memory += GetScaledImageSizeBytes(image);
+        const u64 scaled_size = GetScaledImageSizeBytes(image);
+        total_used_memory += scaled_size;
     }
     InvalidateScale(image);
     return true;
@@ -2492,7 +2267,9 @@ template <class P>
 void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
     ImageBase& image = slot_images[image_id];
     if (image.HasScaled()) {
-        total_used_memory -= GetScaledImageSizeBytes(image);
+        const u64 scaled_size = GetScaledImageSizeBytes(image);
+        ASSERT(total_used_memory >= scaled_size);
+        total_used_memory -= std::min(total_used_memory, scaled_size);
     }
     u64 tentative_size = std::max(image.guest_size_bytes, image.unswizzled_size_bytes);
     if ((IsPixelFormatASTC(image.info.format) &&
@@ -2500,7 +2277,20 @@ void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
         True(image.flags & ImageFlagBits::Converted)) {
         tentative_size = TranscodedAstcSize(tentative_size, image.info.format);
     }
-    total_used_memory -= Common::AlignUp(tentative_size, 1024);
+    const u64 aligned_size = Common::AlignUp(tentative_size, 1024);
+    ASSERT(total_used_memory >= aligned_size);
+    total_used_memory -= std::min(total_used_memory, aligned_size);
+
+    if (texture_count > 0) {
+        --texture_count;
+    }
+    if (True(image.flags & ImageFlagBits::Sparse) && sparse_texture_count > 0) {
+        --sparse_texture_count;
+        sparse_texture_memory -= std::min(sparse_texture_memory, aligned_size);
+    }
+    if (aligned_size >= LARGE_TEXTURE_THRESHOLD) {
+        large_texture_memory -= std::min(large_texture_memory, aligned_size);
+    }
     const GPUVAddr gpu_addr = image.gpu_addr;
     const auto alloc_it = image_allocs_table.find(gpu_addr);
     if (alloc_it == image_allocs_table.end()) {

@@ -430,25 +430,6 @@ abstract class SettingsItem(
             )
             put(
                 SingleChoiceSetting(
-                    IntSetting.ANDROID_ASTC_MODE,
-                    titleId = R.string.android_astc_mode,
-                    descriptionId = R.string.android_astc_mode_description,
-                    choicesId = R.array.androidAstcModeNames,
-                    valuesId = R.array.androidAstcModeValues
-                )
-            )
-            put(
-                SingleChoiceSetting(
-                    IntSetting.VRAM_USAGE_MODE,
-                    titleId = R.string.vram_usage_mode,
-                    descriptionId = R.string.vram_usage_mode_description,
-                    choicesId = R.array.vramUsageModeNames,
-                    valuesId = R.array.vramUsageModeValues
-                )
-            )
-
-            put(
-                SingleChoiceSetting(
                     IntSetting.FRAME_SKIPPING,
                     titleId = R.string.frame_skipping,
                     descriptionId = R.string.frame_skipping_description,
@@ -479,61 +460,6 @@ abstract class SettingsItem(
                     BooleanSetting.USE_CONDITIONAL_RENDERING,
                     titleId = R.string.use_conditional_rendering,
                     descriptionId = R.string.use_conditional_rendering_description
-                )
-            )
-
-            // VRAM Management Settings (FIXED: VRAM leak prevention)
-            put(
-                SliderSetting(
-                    IntSetting.VRAM_LIMIT_MB,
-                    titleId = R.string.vram_limit_mb,
-                    descriptionId = R.string.vram_limit_mb_description,
-                    min = 0,
-                    max = 16384,
-                    units = " MB"
-                )
-            )
-            put(
-                SingleChoiceSetting(
-                    IntSetting.GC_AGGRESSIVENESS,
-                    titleId = R.string.gc_aggressiveness,
-                    descriptionId = R.string.gc_aggressiveness_description,
-                    choicesId = R.array.gcAggressivenessNames,
-                    valuesId = R.array.gcAggressivenessValues
-                )
-            )
-            put(
-                SliderSetting(
-                    IntSetting.TEXTURE_EVICTION_FRAMES,
-                    titleId = R.string.texture_eviction_frames,
-                    descriptionId = R.string.texture_eviction_frames_description,
-                    min = 0,
-                    max = 60,
-                    units = " frames"
-                )
-            )
-            put(
-                SliderSetting(
-                    IntSetting.BUFFER_EVICTION_FRAMES,
-                    titleId = R.string.buffer_eviction_frames,
-                    descriptionId = R.string.buffer_eviction_frames_description,
-                    min = 0,
-                    max = 120,
-                    units = " frames"
-                )
-            )
-            put(
-                SwitchSetting(
-                    BooleanSetting.SPARSE_TEXTURE_PRIORITY_EVICTION,
-                    titleId = R.string.sparse_texture_priority_eviction,
-                    descriptionId = R.string.sparse_texture_priority_eviction_description
-                )
-            )
-            put(
-                SwitchSetting(
-                    BooleanSetting.LOG_VRAM_USAGE,
-                    titleId = R.string.log_vram_usage,
-                    descriptionId = R.string.log_vram_usage_description
                 )
             )
 

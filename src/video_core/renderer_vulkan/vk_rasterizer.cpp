@@ -201,39 +201,6 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
       fence_manager(*this, gpu, texture_cache, buffer_cache, query_cache, device, scheduler),
       wfi_event(device.GetLogical().CreateEvent()) {
     scheduler.SetQueryCache(query_cache);
-
-    memory_allocator.SetMemoryPressureCallback([this]() {
-        std::scoped_lock lock{texture_cache.mutex, buffer_cache.mutex};
-
-        // Pipelines and cache resources may still be referenced by queued command buffers.
-        scheduler.Finish();
-        pipeline_cache.TriggerPipelineEviction();
-        try {
-            texture_cache.ForceEmergencyGC();
-            buffer_cache.TriggerGarbageCollection();
-        } catch (const vk::Exception& exception) {
-            if (exception.GetResult() != VK_ERROR_OUT_OF_DEVICE_MEMORY &&
-                exception.GetResult() != VK_ERROR_OUT_OF_HOST_MEMORY) {
-                throw;
-            }
-            // Buffer downloads performed by GC can themselves require a staging allocation. Keep
-            // the resources already evicted by this pass and finish the recovery sequence.
-            LOG_WARNING(Render_Vulkan,
-                        "A nested allocation failed during emergency cache eviction: {}",
-                        exception.what());
-        }
-        staging_pool.TriggerCacheRelease(MemoryUsage::Upload);
-        staging_pool.TriggerCacheRelease(MemoryUsage::Download);
-
-        // Cache eviction uses delayed destruction so resources referenced by queued GPU work remain
-        // alive. Buffer downloads above can also enqueue new work, so drain once more before
-        // flushing the rings; otherwise an immediate allocation retry would not actually regain
-        // the evicted memory.
-        scheduler.Finish();
-        texture_cache.FlushSentencedRings();
-        buffer_cache.FlushDelayedDestructionRing();
-        staging_pool.ReleaseAllFreeBuffers();
-    });
 }
 
 void RasterizerVulkan::Shutdown() {
@@ -854,6 +821,7 @@ void RasterizerVulkan::FlushCommands() {
 }
 
 void RasterizerVulkan::TickFrame() {
+    memory_allocator.TickFrame();
     draw_counter = 0;
     guest_descriptor_queue.TickFrame();
     compute_pass_descriptor_queue.TickFrame();
@@ -877,7 +845,7 @@ void RasterizerVulkan::TickFrame() {
 
 u64 RasterizerVulkan::GetTotalVram() const {
     try {
-        return device.GetDeviceMemoryUsage();
+        return device.GetDeviceMemoryBudget();
     } catch (...) {
         return 0;
     }
@@ -885,10 +853,10 @@ u64 RasterizerVulkan::GetTotalVram() const {
 
 u64 RasterizerVulkan::GetUsedVram() const {
     try {
-        u64 buffer_usage = buffer_cache_runtime.GetDeviceMemoryUsage();
-        u64 texture_usage = texture_cache_runtime.GetDeviceMemoryUsage();
-        u64 staging_usage = staging_pool.GetMemoryUsage();
-        return buffer_usage + texture_usage + staging_usage;
+        if (device.CanReportMemoryUsage()) {
+            return device.GetDeviceMemoryUsage();
+        }
+        return GetBufferMemoryUsage() + GetTextureMemoryUsage() + GetStagingMemoryUsage();
     } catch (...) {
         return 0;
     }
@@ -896,7 +864,8 @@ u64 RasterizerVulkan::GetUsedVram() const {
 
 u64 RasterizerVulkan::GetBufferMemoryUsage() const {
     try {
-        return buffer_cache_runtime.GetDeviceMemoryUsage();
+        std::scoped_lock lock{buffer_cache.mutex};
+        return buffer_cache.GetBufferVRAMStats().total_used_bytes;
     } catch (...) {
         return 0;
     }
@@ -904,7 +873,8 @@ u64 RasterizerVulkan::GetBufferMemoryUsage() const {
 
 u64 RasterizerVulkan::GetTextureMemoryUsage() const {
     try {
-        return texture_cache_runtime.GetDeviceMemoryUsage();
+        std::scoped_lock lock{texture_cache.mutex};
+        return texture_cache.GetVRAMStats().total_used_bytes;
     } catch (...) {
         return 0;
     }
@@ -916,16 +886,6 @@ u64 RasterizerVulkan::GetStagingMemoryUsage() const {
     } catch (...) {
         return 0;
     }
-}
-
-void RasterizerVulkan::TriggerMemoryGC() {
-    std::shared_lock shared_guard{shutdown_mutex};
-    if (is_shutting_down)
-        return;
-
-    std::scoped_lock lock{texture_cache.mutex, buffer_cache.mutex};
-    texture_cache.TriggerGarbageCollection();
-    buffer_cache.TriggerGarbageCollection();
 }
 
 bool RasterizerVulkan::AccelerateConditionalRendering() {
