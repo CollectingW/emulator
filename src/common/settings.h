@@ -476,12 +476,6 @@ struct Values {
                                                                   AstcRecompression::Bc3,
                                                                   "astc_recompression",
                                                                   Category::RendererAdvanced};
-    SwitchableSetting<VramUsageMode, true> vram_usage_mode{linkage,
-                                                           VramUsageMode::Conservative,
-                                                           VramUsageMode::Conservative,
-                                                           VramUsageMode::Aggressive,
-                                                           "vram_usage_mode",
-                                                           Category::RendererAdvanced};
 
     SwitchableSetting<bool> async_presentation{linkage,
 #ifdef ANDROID

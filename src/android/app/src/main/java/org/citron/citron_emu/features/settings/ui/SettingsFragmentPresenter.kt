@@ -1047,7 +1047,6 @@ class SettingsFragmentPresenter(
             add(IntSetting.ASTC_RECOMPRESSION.key)
 
             add(HeaderSetting(R.string.advanced_graphics_header))
-            add(IntSetting.VRAM_USAGE_MODE.key)
             add(IntSetting.EXTENDED_DYNAMIC_STATE.key)
             add(BooleanSetting.USE_CONDITIONAL_RENDERING.key)
 

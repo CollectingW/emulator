@@ -799,6 +799,9 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
     }
     LOG_ERROR(Render_Vulkan, "{}", exception.what());
     return nullptr;
+} catch (const vk::Exception& exception) {
+    LOG_ERROR(Render_Vulkan, "{}", exception.what());
+    return nullptr;
 }
 
 std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
@@ -880,6 +883,9 @@ std::unique_ptr<ComputePipeline> PipelineCache::CreateComputePipeline(
                                              &shader_notify, program.info, std::move(spv_module));
 
 } catch (const Shader::Exception& exception) {
+    LOG_ERROR(Render_Vulkan, "{}", exception.what());
+    return nullptr;
+} catch (const vk::Exception& exception) {
     LOG_ERROR(Render_Vulkan, "{}", exception.what());
     return nullptr;
 }

@@ -155,16 +155,6 @@ void VramOverlay::DrawVramInfo(QPainter& painter) {
     painter.drawText(section_padding, y_offset, QString::fromUtf8("Textures: %1").arg(FormatMemorySize(current_vram_data.texture_memory)));
     y_offset += line_height - (UISettings::IsGamescope() ? 0 : 1);
     painter.drawText(section_padding, y_offset, QString::fromUtf8("Staging: %1").arg(FormatMemorySize(current_vram_data.staging_memory)));
-    y_offset += line_height + section_spacing;
-
-    painter.setPen(secondary_text_color);
-    QString mode_text;
-    switch (Settings::values.vram_usage_mode.GetValue()) {
-        case Settings::VramUsageMode::Conservative: mode_text = QString::fromUtf8("Mode: Conservative"); break;
-        case Settings::VramUsageMode::Aggressive: mode_text = QString::fromUtf8("Mode: Aggressive"); break;
-        default: mode_text = QString::fromUtf8("Mode: Unknown"); break;
-    }
-    painter.drawText(section_padding, y_offset, mode_text);
 }
 
 void VramOverlay::DrawVramGraph(QPainter& painter) {

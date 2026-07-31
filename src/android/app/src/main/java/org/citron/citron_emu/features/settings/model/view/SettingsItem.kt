@@ -430,16 +430,6 @@ abstract class SettingsItem(
             )
             put(
                 SingleChoiceSetting(
-                    IntSetting.VRAM_USAGE_MODE,
-                    titleId = R.string.vram_usage_mode,
-                    descriptionId = R.string.vram_usage_mode_description,
-                    choicesId = R.array.vramUsageModeNames,
-                    valuesId = R.array.vramUsageModeValues
-                )
-            )
-
-            put(
-                SingleChoiceSetting(
                     IntSetting.FRAME_SKIPPING,
                     titleId = R.string.frame_skipping,
                     descriptionId = R.string.frame_skipping_description,
