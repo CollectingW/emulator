@@ -39,6 +39,7 @@
 #include "common/assert.h"
 #include "common/bit_field.h"
 #include "common/logging.h"
+#include "video_core/arm64_register_guard.h"
 #ifdef ARCHITECTURE_x86_64
 #include "common/x64/xbyak_abi.h"
 #include "common/x64/xbyak_util.h"
@@ -73,6 +74,160 @@ bool IsTopologySafe(Maxwell3D::Regs::PrimitiveTopology topology) {
         return false;
     }
 }
+
+#if CITRON_ARM64_REGISTER_GUARD_SUPPORTED
+struct MacroCallCorruptionTag;
+
+extern "C" __attribute__((noinline, no_stack_protector, used)) void CitronMacroCallMethodThunk(
+    Maxwell3D* maxwell3d, u32 method, u32 value);
+
+extern "C" __attribute__((naked, noinline)) u32 CitronMacroCallMethodPreservingRegisters(
+    Maxwell3D* maxwell3d, u32 method, u32 value);
+
+extern "C" __attribute__((noinline, no_stack_protector, used)) void CitronMacroCallMethodThunk(
+    Maxwell3D* maxwell3d, u32 method, u32 value) {
+    maxwell3d->CallMethod(method, value, true);
+}
+
+// Some Android Vulkan user drivers have been observed returning with AArch64 callee-saved
+// registers corrupted. Keep that corruption from escaping the macro CallMethod boundary.
+// x22 is saved redundantly so its entry value can be recovered by majority vote.
+// Return a bitmask describing corruption of x22 copies and the lower/upper stack guards.
+// Bit 0: x22 copies differ. Bit 1: lower guard changed. Bit 2: upper guard changed.
+// Bit 3: no x22 majority was available, so the first entry-observed copy was preserved.
+// Bit 4: x29 differs from its saved value.
+extern "C" __attribute__((naked, noinline)) u32 CitronMacroCallMethodPreservingRegisters(
+    Maxwell3D*, u32, u32) {
+    asm volatile("sub sp, sp, #272\n"
+                 ".cfi_def_cfa_offset 272\n"
+                 "movz x9, #0x4752\n"
+                 "movk x9, #0x4f4e, lsl #16\n"
+                 "movk x9, #0x5452, lsl #32\n"
+                 "movk x9, #0x4349, lsl #48\n"
+                 "str x9, [sp, #0]\n"
+                 "str x22, [sp, #8]\n"
+                 "stp x18, x19, [sp, #16]\n"
+                 ".cfi_offset 18, -256\n"
+                 ".cfi_offset 19, -248\n"
+                 "stp x20, x21, [sp, #32]\n"
+                 ".cfi_offset 20, -240\n"
+                 ".cfi_offset 21, -232\n"
+                 "stp x22, x23, [sp, #48]\n"
+                 ".cfi_offset 22, -224\n"
+                 ".cfi_offset 23, -216\n"
+                 "stp x24, x25, [sp, #64]\n"
+                 ".cfi_offset 24, -208\n"
+                 ".cfi_offset 25, -200\n"
+                 "stp x26, x27, [sp, #80]\n"
+                 ".cfi_offset 26, -192\n"
+                 ".cfi_offset 27, -184\n"
+                 "stp x28, x29, [sp, #96]\n"
+                 ".cfi_offset 28, -176\n"
+                 ".cfi_offset 29, -168\n"
+                 "str x30, [sp, #112]\n"
+                 ".cfi_offset 30, -160\n"
+                 "stp q8, q9, [sp, #128]\n"
+                 ".cfi_offset 72, -144\n"
+                 ".cfi_offset 73, -128\n"
+                 "stp q10, q11, [sp, #160]\n"
+                 ".cfi_offset 74, -112\n"
+                 ".cfi_offset 75, -96\n"
+                 "stp q12, q13, [sp, #192]\n"
+                 ".cfi_offset 76, -80\n"
+                 ".cfi_offset 77, -64\n"
+                 "stp q14, q15, [sp, #224]\n"
+                 ".cfi_offset 78, -48\n"
+                 ".cfi_offset 79, -32\n"
+                 "str x9, [sp, #256]\n"
+                 "str x22, [sp, #264]\n"
+                 "bl CitronMacroCallMethodThunk\n"
+                 "mov w0, wzr\n"
+                 "movz x9, #0x4752\n"
+                 "movk x9, #0x4f4e, lsl #16\n"
+                 "movk x9, #0x5452, lsl #32\n"
+                 "movk x9, #0x4349, lsl #48\n"
+                 "ldr x10, [sp, #0]\n"
+                 "cmp x10, x9\n"
+                 "cset w11, ne\n"
+                 "orr w0, w0, w11, lsl #1\n"
+                 "ldr x10, [sp, #256]\n"
+                 "cmp x10, x9\n"
+                 "cset w11, ne\n"
+                 "orr w0, w0, w11, lsl #2\n"
+                 "ldr x9, [sp, #104]\n"
+                 "cmp x29, x9\n"
+                 "cset w10, ne\n"
+                 "orr w0, w0, w10, lsl #4\n"
+                 "ldr x9, [sp, #48]\n"
+                 "ldr x10, [sp, #8]\n"
+                 "ldr x11, [sp, #264]\n"
+                 "cmp x9, x10\n"
+                 "cset w12, ne\n"
+                 "cmp x9, x11\n"
+                 "cset w13, ne\n"
+                 "orr w12, w12, w13\n"
+                 "orr w0, w0, w12\n"
+                 "tbz w0, #1, 1f\n"
+                 "tbnz w0, #2, 3f\n"
+                 "mov x22, x11\n"
+                 "b 6f\n"
+                 "1:\n"
+                 "tbz w0, #2, 3f\n"
+                 "mov x22, x10\n"
+                 "b 6f\n"
+                 "3:\n"
+                 "cmp x9, x10\n"
+                 "b.eq 4f\n"
+                 "cmp x9, x11\n"
+                 "b.eq 4f\n"
+                 "cmp x10, x11\n"
+                 "b.eq 5f\n"
+                 "mov x22, x9\n"
+                 "orr w0, w0, #8\n"
+                 "b 6f\n"
+                 "4:\n"
+                 "mov x22, x9\n"
+                 "b 6f\n"
+                 "5:\n"
+                 "mov x22, x10\n"
+                 "6:\n"
+                 ".cfi_restore 22\n"
+                 "ldp q14, q15, [sp, #224]\n"
+                 ".cfi_restore 78\n"
+                 ".cfi_restore 79\n"
+                 "ldp q12, q13, [sp, #192]\n"
+                 ".cfi_restore 76\n"
+                 ".cfi_restore 77\n"
+                 "ldp q10, q11, [sp, #160]\n"
+                 ".cfi_restore 74\n"
+                 ".cfi_restore 75\n"
+                 "ldp q8, q9, [sp, #128]\n"
+                 ".cfi_restore 72\n"
+                 ".cfi_restore 73\n"
+                 "ldr x30, [sp, #112]\n"
+                 ".cfi_restore 30\n"
+                 "ldp x28, x29, [sp, #96]\n"
+                 ".cfi_restore 28\n"
+                 ".cfi_restore 29\n"
+                 "ldp x26, x27, [sp, #80]\n"
+                 ".cfi_restore 26\n"
+                 ".cfi_restore 27\n"
+                 "ldp x24, x25, [sp, #64]\n"
+                 ".cfi_restore 24\n"
+                 ".cfi_restore 25\n"
+                 "ldr x23, [sp, #56]\n"
+                 ".cfi_restore 23\n"
+                 "ldp x20, x21, [sp, #32]\n"
+                 ".cfi_restore 20\n"
+                 ".cfi_restore 21\n"
+                 "ldp x18, x19, [sp, #16]\n"
+                 ".cfi_restore 18\n"
+                 ".cfi_restore 19\n"
+                 "add sp, sp, #272\n"
+                 ".cfi_def_cfa_offset 0\n"
+                 "ret\n");
+}
+#endif
 
 } // Anonymous namespace
 
@@ -447,6 +602,12 @@ void HLE_TransformFeedbackSetup::Execute(Engines::Maxwell3D& maxwell3d, std::spa
 
 void MacroInterpreterImpl::Execute(Engines::Maxwell3D& maxwell3d, std::span<const u32> params, u32 method) {
     Reset();
+    current_method = method;
+
+    if (params.empty()) {
+        LOG_WARNING(HW_GPU, "Macro 0x{:x} invoked without parameters; skipping execution", method);
+        return;
+    }
 
     registers[1] = params[0];
     parameters.resize(params.size());
@@ -459,7 +620,10 @@ void MacroInterpreterImpl::Execute(Engines::Maxwell3D& maxwell3d, std::span<cons
     }
 
     // Assert the the macro used all the input parameters
-    ASSERT(next_parameter_index == parameters.size());
+    if (!execution_faulted && next_parameter_index != parameters.size()) {
+        LOG_WARNING(HW_GPU, "Macro 0x{:x} consumed {} of {} parameters before exiting",
+                    current_method, next_parameter_index, parameters.size());
+    }
 }
 
 /// Resets the execution engine state, zeroing registers, etc.
@@ -473,12 +637,26 @@ void MacroInterpreterImpl::Reset() {
     // parameter.
     next_parameter_index = 1;
     carry_flag = false;
+    execution_faulted = false;
+    nested_macro_warning_reported = false;
 }
 
 /// @brief Executes a single macro instruction located at the current program counter. Returns whether
 /// the interpreter should keep running.
 /// @param is_delay_slot Whether the current step is being executed due to a delay slot in a previous instruction.
 bool MacroInterpreterImpl::Step(Engines::Maxwell3D& maxwell3d, bool is_delay_slot) {
+    if (execution_faulted) {
+        return false;
+    }
+    if ((pc % sizeof(u32)) != 0 || pc / sizeof(u32) >= code.size()) {
+        LOG_WARNING(HW_GPU,
+                    "Macro 0x{:x} attempted to execute invalid PC 0x{:x} (code size 0x{:x}); "
+                    "stopping execution",
+                    current_method, pc, code.size_bytes());
+        execution_faulted = true;
+        return false;
+    }
+
     u32 base_address = pc;
 
     Macro::Opcode opcode = GetOpcode();
@@ -535,7 +713,14 @@ bool MacroInterpreterImpl::Step(Engines::Maxwell3D& maxwell3d, bool is_delay_slo
         break;
     }
     case Macro::Operation::Branch: {
-        ASSERT_MSG(!is_delay_slot, "Executing a branch in a delay slot is not valid");
+        if (is_delay_slot) {
+            LOG_WARNING(HW_GPU,
+                        "Macro 0x{:x} attempted a branch in delay slot at PC 0x{:x}; "
+                        "stopping execution",
+                        current_method, base_address);
+            execution_faulted = true;
+            return false;
+        }
         u32 value = GetRegister(opcode.src_a);
         bool taken = EvaluateBranchCondition(opcode.branch_condition, value);
         if (taken) {
@@ -689,7 +874,34 @@ void MacroInterpreterImpl::SetRegister(u32 register_id, u32 value) {
 
 /// Calls a GPU Engine method with the input parameter.
 void MacroInterpreterImpl::Send(Engines::Maxwell3D& maxwell3d, u32 value) {
+    if (execution_faulted) {
+        return;
+    }
+    if (method_address.address.Value() >= Engines::Maxwell3D::Regs::NUM_REGS &&
+        !nested_macro_warning_reported) {
+        nested_macro_warning_reported = true;
+        LOG_WARNING(HW_GPU,
+                    "Macro 0x{:x} is invoking nested macro method 0x{:x} at PC 0x{:x} "
+                    "with value 0x{:08x}",
+                    current_method, method_address.address.Value(), pc, value);
+    }
+#if CITRON_ARM64_REGISTER_GUARD_SUPPORTED
+    if (Settings::values.android_arm64_register_guards.GetValue()) {
+        const u32 guard_status = CitronMacroCallMethodPreservingRegisters(
+            &maxwell3d, method_address.address.Value(), value);
+        if (guard_status != 0 &&
+            VideoCore::IsFirstArm64RegisterCorruption<5, MacroCallCorruptionTag>(guard_status)) {
+            LOG_ERROR(HW_GPU,
+                      "ARM64 macro CallMethod thunk corruption flags=0x{:x}, macro=0x{:x}, "
+                      "PC=0x{:x}, method=0x{:x}, value=0x{:08x}",
+                      guard_status, current_method, pc, method_address.address.Value(), value);
+        }
+    } else {
+        maxwell3d.CallMethod(method_address.address, value, true);
+    }
+#else
     maxwell3d.CallMethod(method_address.address, value, true);
+#endif
     // Increment the method address by the method increment.
     method_address.address.Assign(method_address.address.Value() + method_address.increment.Value());
 }
@@ -701,7 +913,14 @@ u32 MacroInterpreterImpl::Read(Engines::Maxwell3D& maxwell3d, u32 method) const 
 
 /// Returns the next parameter in the parameter queue.
 u32 MacroInterpreterImpl::FetchParameter() {
-    ASSERT(next_parameter_index < parameters.size());
+    if (next_parameter_index >= parameters.size()) {
+        LOG_WARNING(HW_GPU,
+                    "Macro 0x{:x} exhausted parameters at PC 0x{:x} "
+                    "(requested index {}, count {}); stopping execution",
+                    current_method, pc, next_parameter_index, parameters.size());
+        execution_faulted = true;
+        return 0;
+    }
     return parameters[next_parameter_index++];
 }
 

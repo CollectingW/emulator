@@ -1,12 +1,51 @@
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <exception>
+
 #include "common/settings.h"
+#include "video_core/arm64_register_guard.h"
 #include "video_core/dirty_flags.h"
 #include "video_core/engines/draw_manager.h"
 #include "video_core/rasterizer_interface.h"
 
 namespace Tegra::Engines {
+
+namespace {
+
+#if CITRON_ARM64_REGISTER_GUARD_SUPPORTED
+struct DrawCorruptionTag;
+
+thread_local std::exception_ptr rasterizer_draw_exception;
+
+extern "C" __attribute__((noinline, no_stack_protector, used)) void
+CitronRasterizerDrawThunk(VideoCore::RasterizerInterface* rasterizer, bool draw_indexed,
+                          u32 instance_count) noexcept;
+
+extern "C" __attribute__((naked, noinline)) u32
+CitronRasterizerDrawPreservingRegisters(VideoCore::RasterizerInterface* rasterizer,
+                                        bool draw_indexed, u32 instance_count);
+
+extern "C" __attribute__((noinline, no_stack_protector, used)) void
+CitronRasterizerDrawThunk(VideoCore::RasterizerInterface* rasterizer, bool draw_indexed,
+                          u32 instance_count) noexcept {
+    try {
+        rasterizer->Draw(draw_indexed, instance_count);
+    } catch (...) {
+        rasterizer_draw_exception = std::current_exception();
+    }
+}
+
+// Contain AArch64 ABI violations at the complete rasterizer draw boundary. Bits 0-9 report
+// x19-x28 respectively; bits 10-11 report lower/upper guard damage; bit 12 reports x29.
+extern "C" __attribute__((naked, noinline)) u32
+CitronRasterizerDrawPreservingRegisters(VideoCore::RasterizerInterface*, bool, u32) {
+    CITRON_ARM64_PRESERVE_REGISTERS(CitronRasterizerDrawThunk);
+}
+#endif
+
+} // Anonymous namespace
+
 DrawManager::DrawManager(Maxwell3D* maxwell3d_) : maxwell3d(maxwell3d_) {}
 
 void DrawManager::ProcessMethodCall(u32 method, u32 argument) {
@@ -267,7 +306,30 @@ void DrawManager::ProcessDraw(bool draw_indexed, u32 instance_count) {
     UpdateTopology();
 
     if (maxwell3d->ShouldExecute()) {
+#if CITRON_ARM64_REGISTER_GUARD_SUPPORTED
+        if (Settings::values.android_arm64_register_guards.GetValue()) {
+            rasterizer_draw_exception = {};
+            const u32 draw_corruption = CitronRasterizerDrawPreservingRegisters(
+                maxwell3d->rasterizer, draw_indexed, instance_count);
+            const std::exception_ptr draw_exception = rasterizer_draw_exception;
+            rasterizer_draw_exception = {};
+            if (draw_corruption != 0 &&
+                VideoCore::IsFirstArm64RegisterCorruption<13, DrawCorruptionTag>(
+                    draw_corruption)) {
+                LOG_ERROR(
+                    HW_GPU,
+                    "ARM64 RasterizerInterface::Draw corrupted callee-saved state mask={:#x}",
+                    draw_corruption);
+            }
+            if (draw_exception) {
+                std::rethrow_exception(draw_exception);
+            }
+        } else {
+            maxwell3d->rasterizer->Draw(draw_indexed, instance_count);
+        }
+#else
         maxwell3d->rasterizer->Draw(draw_indexed, instance_count);
+#endif
     }
 }
 
