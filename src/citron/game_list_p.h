@@ -111,6 +111,8 @@ public:
     static constexpr int FileTypeRole = SortRole + 4;
     static constexpr int HighResIconRole = SortRole + 5;
     static constexpr int OriginalTitleRole = SortRole + 6;
+    // NACP display version, e.g. "3.0.5" (not PatchManager::GetGameVersion()'s raw CNMT code).
+    static constexpr int VersionRole = SortRole + 7;
 
     GameListItemPath() = default;
     GameListItemPath(const QString& game_path, const std::vector<u8>& picture_data,

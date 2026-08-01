@@ -154,7 +154,10 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "citron/install_dialog.h"
 #include "citron/loading_screen.h"
 #include "citron/main.h"
-#include "citron/nextendo_friends_dialog.h"
+#include "citron/nextendo_account_dialog.h"
+#include "citron/nextendo_controller.h"
+#include "citron/nextendo_online_counts.h"
+#include "citron/nextendo_toast.h"
 #include "citron/play_time_manager.h"
 #include "common/nextendo_account.h"
 #include "common/nextendo_friends.h"
@@ -1187,6 +1190,7 @@ void GMainWindow::InitializeWidgets() {
     add_menu(ui->menu_View);
     add_menu(ui->menu_Tools);
     add_menu(ui->menu_Multiplayer);
+    add_menu(ui->menu_NexTendo);
     add_menu(ui->menu_Help);
 
     // Set first/last button specific styling if needed, but the new flat look is preferred
@@ -1240,6 +1244,10 @@ void GMainWindow::InitializeWidgets() {
     multiplayer_state = new MultiplayerState(this, game_list->GetModel(), ui->action_Leave_Room,
                                              ui->action_Show_Room, *system);
     multiplayer_state->setVisible(false);
+
+    nextendo_controller = new NextendoController(*system, this, this);
+    nextendo_toast = new NextendoToast(this);
+    Nextendo::OnlineCounts::Start(this);
 
     // Create status bar
     // Style applied in UpdateUITheme()
@@ -1921,15 +1929,59 @@ void GMainWindow::ConnectMenuEvents() {
     });
     nextendo_presence_timer.start();
 
-    connect(ui->action_Nextendo_Friends, &QAction::triggered, this, [this] {
+    // NexTendo
+    ui->action_Nextendo_Sign_In->setEnabled(!Common::NextendoAccount::IsLinked());
+    ui->action_Nextendo_Sign_Out->setEnabled(Common::NextendoAccount::IsLinked());
+    ui->action_Nextendo_Enable_Redirection->setChecked(Settings::values.enable_nextendo.GetValue());
+
+    connect(ui->action_Nextendo_Open_Account, &QAction::triggered, this, [this] {
         if (!Common::NextendoAccount::IsLinked()) {
-            QMessageBox::information(
-                this, tr("Nextendo Friends"),
-                tr("Sign in to your Nextendo account first, in Emulation > Configure > Network."));
+            QMessageBox::information(this, tr("Nextendo Account"),
+                                     tr("Sign in to your Nextendo account first."));
             return;
         }
-        NextendoFriendsDialog(this).exec();
+        NextendoAccountDialog(nextendo_controller, this).exec();
     });
+    connect(ui->action_Nextendo_Sign_In, &QAction::triggered, nextendo_controller,
+            &NextendoController::SignIn);
+    connect(ui->action_Nextendo_Sign_Out, &QAction::triggered, nextendo_controller,
+            &NextendoController::SignOut);
+    connect(ui->action_Nextendo_Enable_Redirection, &QAction::toggled, this, [](bool checked) {
+        Settings::values.enable_nextendo.SetValue(checked);
+    });
+    connect(nextendo_controller, &NextendoController::AccountLinked, this, [this] {
+        ui->action_Nextendo_Sign_In->setEnabled(false);
+        ui->action_Nextendo_Sign_Out->setEnabled(true);
+    });
+    connect(nextendo_controller, &NextendoController::AccountUnlinked, this, [this] {
+        ui->action_Nextendo_Sign_In->setEnabled(true);
+        ui->action_Nextendo_Sign_Out->setEnabled(false);
+    });
+    connect(nextendo_controller, &NextendoController::StatusChanged, this,
+            [this](const QString& message) {
+                if (!message.isEmpty()) {
+                    statusBar()->showMessage(message, 8000);
+                }
+            });
+    connect(nextendo_controller, &NextendoController::FriendCameOnline, this,
+            [this](u64 /*pid*/, const QString& name, const QString& game_name,
+                  const QString& avatar_base64) {
+                const QString detail =
+                    game_name.isEmpty() ? tr("is now online") : tr("is now playing %1").arg(game_name);
+                nextendo_toast->Show(name, detail, avatar_base64);
+            });
+    connect(nextendo_controller, &NextendoController::FriendWentOffline, this,
+            [this](u64 /*pid*/, const QString& name, const QString& avatar_base64) {
+                nextendo_toast->Show(name, tr("is now offline"), avatar_base64);
+            });
+    connect(nextendo_controller, &NextendoController::FriendRequestReceived, this,
+            [this](u64 /*pid*/, const QString& name, const QString& avatar_base64) {
+                nextendo_toast->Show(name, tr("sent you a friend request"), avatar_base64);
+            });
+    connect(nextendo_controller, &NextendoController::FriendRequestSent, this,
+            [this](const QString& friend_code) {
+                nextendo_toast->Show(tr("Friend Request Sent!"), friend_code, {});
+            });
     connect(ui->action_Connect_To_Room, &QAction::triggered, multiplayer_state,
             &MultiplayerState::OnDirectConnectToRoom);
     connect(ui->action_Show_Room, &QAction::triggered, multiplayer_state,
@@ -6980,6 +7032,14 @@ void GMainWindow::SyncNextendoHistory() {
     entry.last_played = fmt::format(
         "{:%Y-%m-%dT%H:%M:%SZ}", fmt::gmtime(std::chrono::system_clock::to_time_t(
                                      std::chrono::system_clock::now())));
+
+    std::vector<u8> icon_bytes;
+    if (system->GetAppLoader().ReadIcon(icon_bytes) == Loader::ResultStatus::Success) {
+        entry.icon_base64 = QByteArray::fromRawData(reinterpret_cast<const char*>(icon_bytes.data()),
+                                                     static_cast<int>(icon_bytes.size()))
+                                .toBase64()
+                                .toStdString();
+    }
 
     // Detached: shutdown must not block on the network.
     std::thread{[entry] { WebService::NextendoApi::SyncHistory({entry}); }}.detach();

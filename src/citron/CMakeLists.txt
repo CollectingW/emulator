@@ -260,8 +260,22 @@ add_executable(citron
     multiplayer/validation.h
     play_time_manager.cpp
     play_time_manager.h
-    nextendo_friends_dialog.cpp
-    nextendo_friends_dialog.h
+    nextendo_account_dialog.cpp
+    nextendo_account_dialog.h
+    nextendo_account_page_p.h
+    nextendo_avatar_cache.cpp
+    nextendo_avatar_cache.h
+    nextendo_controller.cpp
+    nextendo_controller.h
+    nextendo_friend_delegate.cpp
+    nextendo_friend_delegate.h
+    nextendo_compatible_titles.h
+    nextendo_history_delegate.cpp
+    nextendo_history_delegate.h
+    nextendo_online_counts.cpp
+    nextendo_online_counts.h
+    nextendo_toast.cpp
+    nextendo_toast.h
     precompiled_headers.h
     qt_common.cpp
     qt_common.h

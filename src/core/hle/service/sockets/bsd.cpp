@@ -6,6 +6,7 @@
 #include <chrono>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -104,6 +105,28 @@ void ClearParkedUdpSockets() {
         parked.socket->Close();
     }
     g_parked_udp_sockets.clear();
+}
+
+// Best-effort PRUDP-Lite header decode for P2P match traffic (SYN/CONNECT/DATA/DISCONNECT/PING +
+// flags). Only the header is plaintext; the RMC payload inside stays opaque. Returns empty for
+// anything that isn't a PRUDP-Lite packet (magic 0x80, >=12 bytes) so callers can skip it.
+std::string DescribePrudpLite(std::span<const u8> data) {
+    static constexpr std::array<const char*, 5> type_names{"SYN", "CONNECT", "DATA", "DISCONNECT",
+                                                            "PING"};
+    if (data.size() < 12 || data[0] != 0x80) {
+        return {};
+    }
+    const u16 type_flags = static_cast<u16>(data[8] | (data[9] << 8));
+    const u8 type = type_flags & 0xF;
+    const u16 flags = type_flags >> 4;
+    std::string out = fmt::format("prudp type={}", type < type_names.size() ? type_names[type]
+                                                                            : std::to_string(type));
+    if (flags & 0x001) out += "|ACK";
+    if (flags & 0x002) out += "|Reliable";
+    if (flags & 0x004) out += "|NeedACK";
+    if (flags & 0x200) out += "|MultiACK";
+    out += fmt::format(" id={}", static_cast<u16>(data[10] | (data[11] << 8)));
+    return out;
 }
 
 static bool TryInjectTlsSni(std::span<const u8> input, const std::string& host_name, std::vector<u8>& output) {
@@ -831,6 +854,13 @@ std::pair<s32, Errno> BSD::SocketImpl(Domain domain, Type type, Protocol protoco
 std::pair<s32, Errno> BSD::PollImpl(std::vector<u8>& write_buffer, std::span<const u8> read_buffer,
                                     s32 nfds, s32 timeout) {
     if (nfds <= 0) {
+        // poll(NULL, 0, timeout) is a portable sleep idiom titles use for pacing/backoff
+        // between retries. Real poll() actually blocks for the requested duration; honor
+        // that here instead of returning instantly, or a title's own retry-count budget
+        // burns through in microseconds instead of the real time it was paced for.
+        if (timeout > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(timeout));
+        }
         // When no entries are provided, -1 is returned with errno zero
         return {-1, Errno::SUCCESS};
     }
@@ -1281,6 +1311,10 @@ std::pair<s32, Errno> BSD::RecvFromImpl(s32 fd, u32 flags, std::vector<u8>& mess
             ASSERT(addr.size() == sizeof(SockAddrIn));
             const SockAddrIn result = Translate(addr_in);
             PutValue(addr, result);
+            LOG_DEBUG(Service, "RecvFrom fd={} <- {}.{}.{}.{}:{} len={} {}", fd, addr_in.ip[0],
+                      addr_in.ip[1], addr_in.ip[2], addr_in.ip[3], addr_in.portno, ret,
+                      DescribePrudpLite(std::span<const u8>{message.data(),
+                                                            static_cast<size_t>(std::max(ret, 0))}));
         }
     }
 
@@ -1352,6 +1386,12 @@ std::pair<s32, Errno> BSD::SendToImpl(s32 fd, u32 flags, std::span<const u8> mes
         auto guest_addr_in = GetValue<SockAddrIn>(addr);
         addr_in = Translate(guest_addr_in);
         p_addr_in = &addr_in;
+    }
+
+    if (!descriptor.is_connection_based && p_addr_in) {
+        LOG_DEBUG(Service, "SendTo fd={} -> {}.{}.{}.{}:{} len={} {}", fd, p_addr_in->ip[0],
+                  p_addr_in->ip[1], p_addr_in->ip[2], p_addr_in->ip[3], p_addr_in->portno,
+                  message.size(), DescribePrudpLite(message));
     }
 
     return Translate(file_descriptors[fd]->socket->SendTo(flags, message, p_addr_in));

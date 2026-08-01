@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <queue>
 #include "common/logging.h"
 #include "common/uuid.h"
@@ -610,11 +611,15 @@ void IFriendService::UpdateUserPresence(HLERequestContext& ctx) {
         // since that is the title's own joinable-session data.
         const auto status = std::max<s32>(static_cast<s32>(presence.status),
                                           Common::NextendoFriends::PresenceOnline);
-        Common::NextendoFriends::SetLocalPresence(
-            status, std::string{reinterpret_cast<const char*>(presence.app_key_value.data()),
-                                presence.app_key_value.size()});
-        LOG_INFO(Service_Friend, "[Nextendo] UpdateUserPresence status={} -> {}",
-                 presence.status, status);
+        const auto app_field =
+            std::string{reinterpret_cast<const char*>(presence.app_key_value.data()),
+                        presence.app_key_value.size()};
+        Common::NextendoFriends::SetLocalPresence(status, app_field);
+        const auto app_field_nonzero =
+            std::ranges::any_of(presence.app_key_value, [](u8 b) { return b != 0; });
+        LOG_INFO(Service_Friend,
+                 "[Nextendo] UpdateUserPresence status={} -> {} app_field_nonzero={}",
+                 presence.status, status, app_field_nonzero);
     } else {
         LOG_WARNING(Service_Friend, "UpdateUserPresence called with no presence buffer");
     }

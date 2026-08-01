@@ -4,6 +4,7 @@
 
 #include <cstring>
 
+#include "common/hex_util.h"
 #include "common/string_util.h"
 
 #include "core/core.h"
@@ -259,14 +260,16 @@ private:
             return res;
         }
         out_data->resize(actual_size);
-        LOG_DEBUG(Service_SSL, "Read {} bytes", actual_size);
+        LOG_DEBUG(Service_SSL, "Read {} bytes: {}", actual_size,
+                  Common::HexToString(*out_data, false));
         return res;
     }
 
     Result WriteImpl(size_t* out_size, std::span<const u8> data) {
         ASSERT_OR_EXECUTE(did_handshake, { return ResultInternalError; });
         const Result res = backend->Write(out_size, data);
-        LOG_DEBUG(Service_SSL, "Write {} bytes, res={}", *out_size, res.raw);
+        LOG_DEBUG(Service_SSL, "Write {} bytes, res={}: {}", *out_size, res.raw,
+                  Common::HexToString(data.subspan(0, *out_size), false));
         return res;
     }
 

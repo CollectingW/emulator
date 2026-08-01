@@ -4,6 +4,7 @@
 #pragma once
 
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 #include "common/common_types.h"
@@ -43,7 +44,8 @@ struct HistoryEntry {
     std::string title_id; // 16 uppercase hex digits
     std::string name;     // may be empty; the server keeps the name it already has
     u64 seconds = 0;
-    std::string last_played; // RFC3339 UTC
+    std::string last_played;  // RFC3339 UTC
+    std::string icon_base64;  // may be empty
 };
 
 // Pushes play time for the account's history. The server merges, so sending only what changed is
@@ -56,6 +58,8 @@ struct Friend {
     std::string friend_code;
     s32 presence_status = 0; // 0 offline, 1 online, 2 in a game
     std::string app_field;   // opaque per-title presence blob
+    std::string app_id;      // running title id, 16 hex digits; empty when nothing is running
+    std::string image_base64; // profile picture, base64 JPEG; empty if none set
 };
 
 struct FriendList {
@@ -83,5 +87,34 @@ void PushPresence(s32 status, const std::string& app_field, const std::string& a
 // Downloads the BCAT schedule seed (a zip of vsdata/coopdata/fesdata) for titles that need one
 // locally to go online (Splatoon 2). title_id_hex is 16 uppercase hex digits. Empty on failure.
 std::vector<u8> DownloadBcatSeed(const std::string& title_id_hex);
+
+// Public, unauthenticated. Maps lowercase-hex title id -> currently connected player count.
+std::map<std::string, int> GetOnlineCounts();
+
+struct Profile {
+    bool ok = false;
+    std::string error;
+    std::string name;         // acct.Username, the authoritative account nickname
+    std::string image_base64; // own profile picture, base64 JPEG; empty if none set
+};
+
+// Uses the stored account token. Own profile only (name + picture).
+Profile GetProfile();
+
+struct HistoryItem {
+    std::string title_id;     // 16 hex digits
+    std::string name;
+    std::string icon_base64;  // may be empty
+    u64 seconds = 0;
+    std::string last_played;  // RFC3339 UTC, may be empty if never recorded
+};
+
+struct HistoryList {
+    bool ok = false;
+    std::string error;
+    std::vector<HistoryItem> entries;
+};
+
+HistoryList GetHistory();
 
 } // namespace WebService::NextendoApi

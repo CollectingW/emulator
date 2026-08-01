@@ -45,6 +45,9 @@ class ProfilerWidget;
 class ControllerDialog;
 class QLabel;
 class MultiplayerState;
+class NextendoAccountDialog;
+class NextendoController;
+class NextendoToast;
 class QPushButton;
 class QProgressDialog;
 class QSlider;
@@ -437,6 +440,8 @@ private:
     LoadingScreen* loading_screen;
     QTimer shutdown_timer;
     QTimer nextendo_presence_timer;
+    NextendoController* nextendo_controller = nullptr;
+    NextendoToast* nextendo_toast = nullptr;
     OverlayDialog* shutdown_dialog{};
     PerformanceOverlay* performance_overlay{};
     MultiplayerRoomOverlay* multiplayer_room_overlay{};

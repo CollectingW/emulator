@@ -120,7 +120,7 @@ namespace UISettings {
                 true,
                 true};
 
-                Setting<bool> first_start{linkage, true, "firstStart", Category::Ui};
+                Setting<bool> first_start{linkage, false, "firstStart", Category::Ui};
                 Setting<bool> setup_resume{linkage, false, "setupResume", Category::Ui};
                 Setting<bool> pause_when_in_background{linkage,
                     false,

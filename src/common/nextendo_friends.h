@@ -16,7 +16,7 @@ struct Entry {
     u64 pid = 0;
     std::string name;
     s32 status = 0;        // 0 offline, 1 online, 2 in a game
-    std::string app_field; // opaque per-title presence blob, base64 as the server sends it
+    std::string app_field; // opaque per-title presence blob, raw bytes (already base64-decoded)
 };
 
 void Set(std::vector<Entry> entries);

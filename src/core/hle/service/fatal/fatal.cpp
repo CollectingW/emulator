@@ -169,6 +169,14 @@ static void ThrowFatalError(Core::System& system, Result error_code, FatalType f
                         "CMIF 212 error detected - likely an unimplemented applet spawn cascading "
                         "from an online service timeout. Continuing execution instead of crashing.");
             break;
+        } else if (error_code.raw == 0) {
+            // A raw value of 0 decodes as module 0 / description 0, i.e. Result::Success thrown
+            // through the fatal path. Seen from the same SSBU online-panic routine as the CMIF/212
+            // case above (same backtrace range), just a different call site in it.
+            LOG_WARNING(Service_Fatal,
+                        "Fatal thrown with a raw Success result - likely the same game-generated "
+                        "online-panic routine. Continuing execution instead of crashing.");
+            break;
         }
         // Since we have no fatal:u error screen. We should just kill execution instead
         ASSERT(false);

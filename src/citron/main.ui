@@ -147,8 +147,16 @@
     <addaction name="separator"/>
     <addaction name="action_Show_Room"/>
     <addaction name="action_Leave_Room"/>
+   </widget>
+   <widget class="QMenu" name="menu_NexTendo">
+    <property name="title">
+     <string>Nex&amp;Tendo</string>
+    </property>
+    <addaction name="action_Nextendo_Open_Account"/>
+    <addaction name="action_Nextendo_Sign_In"/>
+    <addaction name="action_Nextendo_Sign_Out"/>
     <addaction name="separator"/>
-    <addaction name="action_Nextendo_Friends"/>
+    <addaction name="action_Nextendo_Enable_Redirection"/>
    </widget>
    <widget class="QMenu" name="menu_Tools">
     <property name="title">
@@ -202,6 +210,7 @@
    <addaction name="menu_View"/>
    <addaction name="menu_Tools"/>
    <addaction name="menu_Multiplayer"/>
+   <addaction name="menu_NexTendo"/>
    <addaction name="menu_Help"/>
   </widget>
   <action name="action_Install_File_NAND">
@@ -364,12 +373,30 @@
     <string>&amp;Browse Public Game Lobby</string>
    </property>
   </action>
-  <action name="action_Nextendo_Friends">
+  <action name="action_Nextendo_Open_Account">
+   <property name="text">
+    <string>&amp;Open Account Page</string>
+   </property>
+  </action>
+  <action name="action_Nextendo_Sign_In">
+   <property name="text">
+    <string>&amp;Sign In</string>
+   </property>
+  </action>
+  <action name="action_Nextendo_Sign_Out">
    <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Sign &amp;Out</string>
+   </property>
+  </action>
+  <action name="action_Nextendo_Enable_Redirection">
+   <property name="checkable">
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Nextendo &amp;Friends</string>
+    <string>&amp;Enable Network Redirection</string>
    </property>
   </action>
   <action name="action_Start_Room">

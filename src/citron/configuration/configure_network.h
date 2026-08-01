@@ -28,16 +28,11 @@ public:
 
 private slots:
     void OnRestoreDefaultLobbyApi();
-    void OnNextendoSignIn();
-    void OnNextendoSignOut();
 
 private:
     void changeEvent(QEvent*) override;
     void RetranslateUI();
     void SetConfiguration();
-    void UpdateNextendoAccountStatus();
-    void ApplyNextendoProfileName(const std::string& name);
-    void RefreshNextendoFriendCache();
 
     std::unique_ptr<Ui::ConfigureNetwork> ui;
     const Core::System& system;

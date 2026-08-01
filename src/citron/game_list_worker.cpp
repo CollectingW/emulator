@@ -487,10 +487,18 @@ QList<QStandardItem*> MakeGameListEntry(const std::string& path, const std::stri
             QStringLiteral("Players: %1 | Servers: %2").arg(stats.first).arg(stats.second);
     }
 
-    QList<QStandardItem*> list{new GameListItemPath(FormatGameName(path), icon,
-                                                    QString::fromStdString(name),
-                                                    QString::fromStdString(original_name),
-                                                    file_type_string, program_id),
+    auto* path_item = new GameListItemPath(FormatGameName(path), icon, QString::fromStdString(name),
+                                           QString::fromStdString(original_name), file_type_string,
+                                           program_id);
+
+    const QString installed_version =
+        GetGameListCachedObject(fmt::format("{:016X}", program_id), "nx_version.txt", [&patch] {
+            const auto [nacp, control_icon] = patch.GetControlMetadata();
+            return nacp ? QString::fromStdString(nacp->GetVersionString()) : QString{};
+        });
+    path_item->setData(installed_version, GameListItemPath::VersionRole);
+
+    QList<QStandardItem*> list{path_item,
                                new GameListItemCompat(compatibility),
                                new GameListItem(file_type_string),
                                new GameListItemSize(size),

@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2026 citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -63,6 +65,77 @@ std::string Base64Url(std::span<const u8> data) {
         }
     }
 
+    return out;
+}
+
+// Standard (RFC 4648, padded) base64 -- distinct from Base64Url above. The presence AppField is
+// an opaque BINARY blob (Nintendo's packed nn::friends AppKeyValueStorage), not text: handing raw
+// bytes to nlohmann::json::dump() throws type_error.316 the moment the blob contains a byte
+// sequence that isn't valid UTF-8, which packed binary reliably does. The account server stores
+// this string opaquely and the Ryujinx fork encodes/decodes it with .NET's Convert.ToBase64String
+// (standard alphabet), so this has to match that, not the URL-safe alphabet used for PKCE.
+std::string Base64StdEncode(std::span<const u8> data) {
+    static constexpr std::string_view alphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    std::string out;
+    out.reserve((data.size() + 2) / 3 * 4);
+
+    std::size_t i = 0;
+    for (; i + 3 <= data.size(); i += 3) {
+        const u32 triple = (static_cast<u32>(data[i]) << 16) |
+                           (static_cast<u32>(data[i + 1]) << 8) | static_cast<u32>(data[i + 2]);
+        out += alphabet[(triple >> 18) & 0x3F];
+        out += alphabet[(triple >> 12) & 0x3F];
+        out += alphabet[(triple >> 6) & 0x3F];
+        out += alphabet[triple & 0x3F];
+    }
+    const auto remaining = data.size() - i;
+    if (remaining == 1) {
+        const u32 triple = static_cast<u32>(data[i]) << 16;
+        out += alphabet[(triple >> 18) & 0x3F];
+        out += alphabet[(triple >> 12) & 0x3F];
+        out += "==";
+    } else if (remaining == 2) {
+        const u32 triple =
+            (static_cast<u32>(data[i]) << 16) | (static_cast<u32>(data[i + 1]) << 8);
+        out += alphabet[(triple >> 18) & 0x3F];
+        out += alphabet[(triple >> 12) & 0x3F];
+        out += alphabet[(triple >> 6) & 0x3F];
+        out += '=';
+    }
+    return out;
+}
+
+std::vector<u8> Base64StdDecode(std::string_view text) {
+    static constexpr std::string_view alphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::array<s8, 256> table;
+    table.fill(-1);
+    for (std::size_t i = 0; i < alphabet.size(); ++i) {
+        table[static_cast<u8>(alphabet[i])] = static_cast<s8>(i);
+    }
+
+    std::vector<u8> out;
+    out.reserve(text.size() / 4 * 3);
+
+    u32 buffer = 0;
+    int bits = 0;
+    for (const char c : text) {
+        if (c == '=') {
+            break;
+        }
+        const s8 value = table[static_cast<u8>(c)];
+        if (value < 0) {
+            continue;
+        }
+        buffer = (buffer << 6) | static_cast<u32>(value);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<u8>((buffer >> bits) & 0xFF));
+        }
+    }
     return out;
 }
 
@@ -358,6 +431,115 @@ std::vector<u8> DownloadBcatSeed(const std::string& title_id_hex) {
     return std::vector<u8>(result->body.begin(), result->body.end());
 }
 
+std::map<std::string, int> GetOnlineCounts() {
+    std::map<std::string, int> out;
+
+    const auto result = Send("GET", "/api/online-counts", {}, {});
+    if (!result || result->status != 200) {
+        LOG_WARNING(WebService, "Nextendo online-counts fetch failed (HTTP {})",
+                    result ? result->status : 0);
+        return out;
+    }
+    try {
+        const auto json = nlohmann::json::parse(result->body);
+        if (const auto counts = json.find("counts"); counts != json.end() && counts->is_object()) {
+            for (const auto& [title_id, count] : counts->items()) {
+                if (count.is_number_integer()) {
+                    out.emplace(title_id, count.get<int>());
+                }
+            }
+        }
+    } catch (const nlohmann::json::exception& e) {
+        LOG_WARNING(WebService, "Unexpected online-counts response: {}", e.what());
+    }
+
+    return out;
+}
+
+Profile GetProfile() {
+    Profile out;
+
+    const std::string token = Common::NextendoAccount::GetToken();
+    if (token.empty()) {
+        out.error = "Not signed in.";
+        return out;
+    }
+
+    const auto result = Send("GET", "/api/profile", {}, token);
+    if (ClearSessionIfRejected(result)) {
+        out.error = "Your session expired. Sign in again.";
+        return out;
+    }
+    if (!result) {
+        out.error = "Could not reach the Nextendo account server.";
+        return out;
+    }
+    if (result->status != 200) {
+        out.error =
+            ErrorFrom(result->body, fmt::format("Could not load profile (HTTP {}).", result->status));
+        return out;
+    }
+
+    try {
+        const auto json = nlohmann::json::parse(result->body);
+        out.name = json.value("username", std::string{});
+        if (const auto profile = json.find("profile"); profile != json.end()) {
+            out.image_base64 = profile->value("image", std::string{});
+        }
+        out.ok = true;
+    } catch (const nlohmann::json::exception& e) {
+        out.error = fmt::format("Unexpected profile response: {}", e.what());
+    }
+
+    return out;
+}
+
+HistoryList GetHistory() {
+    HistoryList out;
+
+    const std::string token = Common::NextendoAccount::GetToken();
+    if (token.empty()) {
+        out.error = "Not signed in.";
+        return out;
+    }
+
+    const auto result = Send("GET", "/api/history", {}, token);
+    if (ClearSessionIfRejected(result)) {
+        out.error = "Your session expired. Sign in again.";
+        return out;
+    }
+    if (!result) {
+        out.error = "Could not reach the Nextendo account server.";
+        return out;
+    }
+    if (result->status != 200) {
+        out.error =
+            ErrorFrom(result->body, fmt::format("Could not load history (HTTP {}).", result->status));
+        return out;
+    }
+
+    try {
+        const auto json = nlohmann::json::parse(result->body);
+        for (const auto& entry : json.value("history", nlohmann::json::array())) {
+            HistoryItem item;
+            item.title_id = entry.value("title_id", std::string{});
+            item.name = entry.value("name", std::string{});
+            item.icon_base64 = entry.value("icon", std::string{});
+            item.seconds = entry.value("seconds", u64{0});
+            item.last_played = entry.value("last_played", std::string{});
+            out.entries.push_back(std::move(item));
+        }
+        std::sort(out.entries.begin(), out.entries.end(), [](const auto& a, const auto& b) {
+            return a.last_played > b.last_played;
+        });
+        out.ok = true;
+    } catch (const nlohmann::json::exception& e) {
+        out.error = fmt::format("Unexpected history response: {}", e.what());
+    }
+
+    return out;
+}
+
 void SyncHistory(const std::vector<HistoryEntry>& entries) {
     const std::string token = Common::NextendoAccount::GetToken();
     if (token.empty() || entries.empty()) {
@@ -373,6 +555,9 @@ void SyncHistory(const std::vector<HistoryEntry>& entries) {
         };
         if (!entry.name.empty()) {
             item["name"] = entry.name;
+        }
+        if (!entry.icon_base64.empty()) {
+            item["icon"] = entry.icon_base64;
         }
         history.push_back(std::move(item));
     }
@@ -407,9 +592,16 @@ Friend ParseFriend(const nlohmann::json& json) {
         out.name = json.value("username", std::string{});
     }
     out.friend_code = json.value("friend_code", std::string{});
+    out.image_base64 = json.value("image", std::string{});
     if (const auto presence = json.find("presence"); presence != json.end()) {
         out.presence_status = presence->value("status", s32{0});
-        out.app_field = presence->value("app_field", std::string{});
+        // The server hands back what the host published: base64 text wrapping the raw
+        // AppKeyValueStorage blob (see Base64StdEncode in PushPresence). Decode it back to the
+        // raw bytes the guest's UserPresenceImpl.app_key_value expects.
+        const auto app_field_b64 = presence->value("app_field", std::string{});
+        const auto decoded = Base64StdDecode(app_field_b64);
+        out.app_field = std::string{reinterpret_cast<const char*>(decoded.data()), decoded.size()};
+        out.app_id = presence->value("app_id", std::string{});
     }
     return out;
 }
@@ -528,8 +720,14 @@ void PushPresence(s32 status, const std::string& app_field, const std::string& a
         return;
     }
 
+    // app_field is the raw binary AppKeyValueStorage blob (SessionId/Mode/Full/InGame/...), not
+    // text -- nlohmann::json::dump() throws type_error.316 the moment it contains a byte that
+    // isn't valid UTF-8, which packed binary reliably does. Base64 it first, matching what the
+    // server documents and what the Ryujinx fork sends.
+    const std::string encoded_app_field = Base64StdEncode(
+        std::span<const u8>{reinterpret_cast<const u8*>(app_field.data()), app_field.size()});
     const std::string body = nlohmann::json{{"status", status},
-                                            {"app_field", app_field},
+                                            {"app_field", encoded_app_field},
                                             {"app_id", app_id},
                                             {"app_detail", ""}}
                                  .dump();
