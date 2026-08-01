@@ -639,10 +639,11 @@ void IFriendService::GetPlayHistoryRegistrationKey(HLERequestContext& ctx) {
 }
 
 void IFriendService::GetFriendCount(HLERequestContext& ctx) {
-    LOG_DEBUG(Service_Friend, "(STUBBED) GetFriendCount called");
+    const auto count = static_cast<u32>(Common::NextendoFriends::Get().size());
+    LOG_INFO(Service_Friend, "[Nextendo] GetFriendCount -> {}", count);
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
-    rb.Push(0);
+    rb.Push(count);
 }
 
 void IFriendService::GetNewlyFriendCount(HLERequestContext& ctx) {
@@ -794,10 +795,12 @@ void IFriendService::RequestSyncFriendList(HLERequestContext& ctx) {
 }
 
 void IFriendService::GetFriendListForViewer(HLERequestContext& ctx) {
-    LOG_WARNING(Service_Friend, "(STUBBED) GetFriendListForViewer called");
+    const auto count = static_cast<u32>(Common::NextendoFriends::Get().size());
+    LOG_WARNING(Service_Friend, "(partially stubbed) GetFriendListForViewer called -> count={}",
+               count);
     IPC::ResponseBuilder rb{ctx, 3};
     rb.Push(ResultSuccess);
-    rb.Push<u32>(0); // Friend count
+    rb.Push<u32>(count);
 }
 
 void IFriendService::UpdateFriendInfoForViewer(HLERequestContext& ctx) {
