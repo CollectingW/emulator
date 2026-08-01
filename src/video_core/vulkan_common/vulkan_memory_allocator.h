@@ -4,9 +4,7 @@
 
 #pragma once
 
-#include <functional>
 #include <memory>
-#include <mutex>
 #include <span>
 #include <vector>
 #include "common/common_types.h"
@@ -114,13 +112,8 @@ public:
      */
     MemoryCommit Commit(const VkMemoryRequirements& requirements, MemoryUsage usage);
 
-    /**
-     * Sets a callback to be called when memory pressure is detected.
-     * This allows external systems (like caches) to free resources.
-     */
-    void SetMemoryPressureCallback(std::function<void()> callback) {
-        memory_pressure_callback = std::move(callback);
-    }
+    /// Advances VMA's frame index so cached heap budgets are refreshed.
+    void TickFrame();
 
     /// Commits memory required by the buffer and binds it.
     MemoryCommit Commit(const vk::Buffer& buffer, MemoryUsage usage);
@@ -128,9 +121,6 @@ public:
     void NukeAllAllocations();
 
 private:
-    /// Attempts to release cached GPU resources after a Vulkan allocation failure.
-    bool TryRecoverFromOutOfMemory(VkResult result) const;
-
     /// Tries to allocate a chunk of memory.
     bool TryAllocMemory(VkMemoryPropertyFlags flags, u32 type_mask, u64 size);
 
@@ -154,9 +144,7 @@ private:
     VkDeviceSize buffer_image_granularity; // The granularity for adjacent offsets between buffers
                                            // and optimal images
     u32 valid_memory_types{~0u};
-    std::function<void()>
-        memory_pressure_callback; ///< Callback to free resources under memory pressure
-    mutable std::mutex memory_pressure_mutex;
+    u32 frame_index{};
 };
 
 } // namespace Vulkan

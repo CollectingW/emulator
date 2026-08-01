@@ -185,10 +185,18 @@ private:
     spv::ImageOperandsMask mask{};
 };
 
-Id Texture(EmitContext& ctx, IR::TextureInstInfo info, [[maybe_unused]] const IR::Value& index) {
+// Forward-declared: used by Texture()/TextureImage() below its definition.
+Id BindlessArrayIndex(EmitContext& ctx, const IR::Value& index, bool supported);
+
+Id Texture(EmitContext& ctx, IR::TextureInstInfo info, const IR::Value& index) {
     const TextureDefinition& def{ctx.textures.at(info.descriptor_index)};
     if (def.count > 1) {
-        const Id pointer{ctx.OpAccessChain(def.pointer_type, def.id, ctx.Def(index))};
+        const Id idx{index.IsImmediate()
+                         ? ctx.Const(index.U32())
+                         : BindlessArrayIndex(
+                               ctx, index,
+                               ctx.profile.support_sampled_image_array_non_uniform_indexing)};
+        const Id pointer{ctx.OpAccessChain(def.pointer_type, def.id, idx)};
         return ctx.OpLoad(def.sampled_type, pointer);
     } else {
         return ctx.OpLoad(def.sampled_type, def.id);
@@ -199,7 +207,12 @@ Id TextureImage(EmitContext& ctx, IR::TextureInstInfo info, const IR::Value& ind
     if (info.type == TextureType::Buffer) {
         const TextureBufferDefinition& def{ctx.texture_buffers.at(info.descriptor_index)};
         if (def.count > 1) {
-            const Id idx{index.IsImmediate() ? ctx.Const(index.U32()) : ctx.Def(index)};
+            const Id idx{
+                index.IsImmediate()
+                    ? ctx.Const(index.U32())
+                    : BindlessArrayIndex(
+                          ctx, index,
+                          ctx.profile.support_uniform_texel_buffer_array_non_uniform_indexing)};
             const Id ptr{ctx.OpAccessChain(ctx.image_buffer_type, def.id, idx)};
             return ctx.OpLoad(ctx.image_buffer_type, ptr);
         }
@@ -207,7 +220,12 @@ Id TextureImage(EmitContext& ctx, IR::TextureInstInfo info, const IR::Value& ind
     } else {
         const TextureDefinition& def{ctx.textures.at(info.descriptor_index)};
         if (def.count > 1) {
-            const Id idx{index.IsImmediate() ? ctx.Const(index.U32()) : ctx.Def(index)};
+            const Id idx{
+                index.IsImmediate()
+                    ? ctx.Const(index.U32())
+                    : BindlessArrayIndex(
+                          ctx, index,
+                          ctx.profile.support_sampled_image_array_non_uniform_indexing)};
             const Id ptr{ctx.OpAccessChain(def.pointer_type, def.id, idx)};
             return ctx.OpImage(def.image_type, ctx.OpLoad(def.sampled_type, ptr));
         }
@@ -215,11 +233,32 @@ Id TextureImage(EmitContext& ctx, IR::TextureInstInfo info, const IR::Value& ind
     }
 }
 
+// Decorates a copy of divergent bindless indices NonUniform, per descriptor
+// class (`supported`). Never decorates the original id - it may be used
+// elsewhere in the shader. non_uniform_ids caches id -> decorated copy.
+Id BindlessArrayIndex(EmitContext& ctx, const IR::Value& index, bool supported) {
+    const Id idx{ctx.Def(index)};
+    if (!supported) {
+        return idx;
+    }
+    if (const auto it{ctx.non_uniform_ids.find(idx.value)}; it != ctx.non_uniform_ids.end()) {
+        return it->second;
+    }
+    const Id copy{ctx.OpIAdd(ctx.U32[1], idx, ctx.Const(0u))};
+    ctx.Decorate(copy, spv::Decoration::NonUniformEXT);
+    ctx.non_uniform_ids.emplace(idx.value, copy);
+    return copy;
+}
+
 std::pair<Id, bool> Image(EmitContext& ctx, const IR::Value& index, IR::TextureInstInfo info) {
     if (info.type == TextureType::Buffer) {
         const ImageBufferDefinition def{ctx.image_buffers.at(info.descriptor_index)};
         if (def.count > 1) {
-            const Id idx{index.IsImmediate() ? ctx.Const(index.U32()) : ctx.Def(index)};
+            const Id idx{index.IsImmediate()
+                             ? ctx.Const(index.U32())
+                             : BindlessArrayIndex(
+                                   ctx, index,
+                                   ctx.profile.support_storage_texel_buffer_array_non_uniform_indexing)};
             const Id ptr{ctx.OpAccessChain(def.pointer_type, def.id, idx)};
             return {ctx.OpLoad(def.image_type, ptr), def.is_integer};
         }
@@ -227,7 +266,11 @@ std::pair<Id, bool> Image(EmitContext& ctx, const IR::Value& index, IR::TextureI
     } else {
         const ImageDefinition def{ctx.images.at(info.descriptor_index)};
         if (def.count > 1) {
-            const Id idx{index.IsImmediate() ? ctx.Const(index.U32()) : ctx.Def(index)};
+            const Id idx{index.IsImmediate()
+                             ? ctx.Const(index.U32())
+                             : BindlessArrayIndex(
+                                   ctx, index,
+                                   ctx.profile.support_storage_image_array_non_uniform_indexing)};
             const Id ptr{ctx.OpAccessChain(def.pointer_type, def.id, idx)};
             return {ctx.OpLoad(def.image_type, ptr), def.is_integer};
         }

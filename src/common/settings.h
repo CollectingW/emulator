@@ -66,7 +66,6 @@ SWITCHABLE(AstcDecodeMode, true);
 SWITCHABLE(AstcRecompression, true);
 SWITCHABLE(AudioMode, true);
 SWITCHABLE(ExtendedDynamicState, true);
-SWITCHABLE(GCAggressiveness, true);
 SWITCHABLE(CpuBackend, true);
 SWITCHABLE(CpuAccuracy, true);
 SWITCHABLE(FullscreenMode, true);
@@ -477,75 +476,6 @@ struct Values {
                                                                   AstcRecompression::Bc3,
                                                                   "astc_recompression",
                                                                   Category::RendererAdvanced};
-    SwitchableSetting<VramUsageMode, true> vram_usage_mode{linkage,
-                                                           VramUsageMode::Conservative,
-                                                           VramUsageMode::Conservative,
-                                                           VramUsageMode::Aggressive,
-                                                           "vram_usage_mode",
-                                                           Category::RendererAdvanced};
-
-    // FIXED: VRAM leak prevention - New memory management settings
-    // VRAM limit in MB (0 = auto-detect based on GPU, default 6144 for 6GB limit)
-    SwitchableSetting<u32, true> vram_limit_mb{linkage,
-                                               0,     // 0 = auto-detect (80% of available VRAM)
-                                               0,     // min: 0 (auto)
-                                               32768, // max: 32GB
-                                               "vram_limit_mb",
-                                               Category::RendererAdvanced,
-                                               Specialization::Default,
-                                               true,
-                                               true};
-
-    // GC aggressiveness level for texture/buffer cache eviction
-    SwitchableSetting<GCAggressiveness, true> gc_aggressiveness{linkage,
-                                                                GCAggressiveness::Off,
-                                                                GCAggressiveness::Off,
-                                                                GCAggressiveness::Light,
-                                                                "gc_aggressiveness",
-                                                                Category::RendererAdvanced,
-                                                                Specialization::Default,
-                                                                true,
-                                                                true};
-
-    // Number of frames before unused textures are evicted (0 = auto-tune based on VRAM pressure)
-    SwitchableSetting<u32, true> texture_eviction_frames{linkage,
-                                                         0,  // default: 0 (auto-tune)
-                                                         0,  // min: 0 (auto)
-                                                         60, // max: 60 frames (1 second at 60fps)
-                                                         "texture_eviction_frames",
-                                                         Category::RendererAdvanced,
-                                                         Specialization::Default,
-                                                         true,
-                                                         true};
-
-    // Number of frames before unused buffers are evicted (0 = auto-tune based on VRAM pressure)
-    SwitchableSetting<u32, true> buffer_eviction_frames{linkage,
-                                                        0,   // default: 0 (auto-tune)
-                                                        0,   // min: 0 (auto)
-                                                        120, // max: 120 frames (2 seconds at 60fps)
-                                                        "buffer_eviction_frames",
-                                                        Category::RendererAdvanced,
-                                                        Specialization::Default,
-                                                        true,
-                                                        true};
-
-    // Enable sparse texture priority eviction (evict large unmapped pages first)
-    SwitchableSetting<bool> sparse_texture_priority_eviction{
-        linkage, false, "sparse_texture_priority_eviction", Category::RendererAdvanced};
-
-    // Enable VRAM usage logging for debugging
-    SwitchableSetting<bool> log_vram_usage{linkage, false, "log_vram_usage",
-                                           Category::RendererAdvanced};
-
-    // FIXED: Android Adreno 740 native ASTC eviction
-    // Controls texture cache eviction strategy on Android devices with native ASTC support
-    // Auto = detect based on GPU, Native = use compressed size, Decompress = use decompressed size
-    SwitchableSetting<AndroidAstcMode, true> android_astc_mode{linkage,
-                                                               AndroidAstcMode::Auto,
-                                                               AndroidAstcMode::Auto,
-                                                               AndroidAstcMode::Decompress,
-                                                               "android_astc_mode",
-                                                               Category::RendererAdvanced};
 
     SwitchableSetting<bool> async_presentation{linkage,
 #ifdef ANDROID
@@ -604,6 +534,9 @@ struct Values {
         Category::RendererAdvanced};
     SwitchableSetting<bool> use_conditional_rendering{linkage, true, "use_conditional_rendering",
                                                       Category::RendererAdvanced};
+    SwitchableSetting<bool> android_arm64_register_guards{
+        linkage, true, "android_arm64_register_guards", Category::RendererAdvanced,
+        Specialization::Default, true, true};
 
     Setting<bool> renderer_debug{linkage, false, "debug", Category::RendererDebug};
     Setting<bool> renderer_shader_feedback{linkage, false, "shader_feedback",

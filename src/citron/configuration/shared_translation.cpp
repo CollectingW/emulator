@@ -198,36 +198,6 @@ std::unique_ptr<TranslationMap> InitializeTranslations(QWidget* parent) {
            "the emulator to decompress to an intermediate format any card supports, RGBA8.\n"
            "This option recompresses RGBA8 to either the BC1 or BC3 format, saving VRAM but "
            "negatively affecting image quality."));
-    INSERT(Settings, vram_usage_mode, tr("VRAM Usage Mode:"),
-           tr("Selects whether the emulator should prefer to conserve memory or make maximum usage "
-              "of available video memory for performance. Has no effect on integrated graphics. "
-              "Aggressive mode may severely impact the performance of other applications such as "
-              "recording software."));
-
-    // FIXED: VRAM leak prevention - New VRAM management settings
-    INSERT(Settings, vram_limit_mb, tr("VRAM Limit (MB):"),
-           tr("Sets the maximum VRAM usage limit in megabytes. Set to 0 for auto-detection "
-              "(80% of available VRAM). Recommended: 6144 for 8GB GPUs, 4096 for 6GB GPUs."));
-    INSERT(
-        Settings, gc_aggressiveness, tr("GC Aggressiveness:"),
-        tr("Controls how aggressively the emulator evicts unused textures and buffers from VRAM.\n"
-           "Off: Disable automatic cleanup (default).\n"
-           "Light: Gentle cleanup, keeps more textures cached."));
-    INSERT(Settings, texture_eviction_frames, tr("Texture Eviction Frames:"),
-           tr("Number of frames a texture must be unused before it can be evicted. "
-              "Set to 0 for auto-tuning based on VRAM pressure (recommended). "
-              "Lower values free VRAM faster but may cause more texture reloading."));
-    INSERT(Settings, buffer_eviction_frames, tr("Buffer Eviction Frames:"),
-           tr("Number of frames a buffer must be unused before it can be evicted. "
-              "Set to 0 for auto-tuning based on VRAM pressure (recommended). "
-              "Lower values free VRAM faster but may cause more buffer reloading."));
-    INSERT(Settings, sparse_texture_priority_eviction, tr("Sparse Texture Priority Eviction"),
-           tr("Prioritize evicting large sparse textures when VRAM pressure is high. "
-              "This helps prevent VRAM exhaustion in games with large texture atlases."));
-    INSERT(Settings, log_vram_usage, tr("Log VRAM Usage"),
-           tr("Enable logging of VRAM usage statistics for debugging purposes. "
-              "Check the log for 'VRAM GC' and 'VRAM Status' messages."));
-
     INSERT(
         Settings, vsync_mode, tr("VSync Mode:"),
         tr("FIFO (VSync) does not drop frames or exhibit tearing but is limited by the screen "
@@ -401,24 +371,12 @@ std::unique_ptr<ComboboxTranslationMap> ComboboxEnumeration(QWidget* parent) {
              PAIR(AstcRecompression, Bc1, tr("BC1 (Low quality)")),
              PAIR(AstcRecompression, Bc3, tr("BC3 (Medium quality)")),
          }});
-    translations->insert({Settings::EnumMetadata<Settings::VramUsageMode>::Index(),
-                          {
-                              PAIR(VramUsageMode, Conservative, tr("Conservative")),
-                              PAIR(VramUsageMode, Aggressive, tr("Aggressive")),
-                          }});
     translations->insert({Settings::EnumMetadata<Settings::ExtendedDynamicState>::Index(),
                           {
                               PAIR(ExtendedDynamicState, Disabled, tr("Disabled")),
                               PAIR(ExtendedDynamicState, EDS1, tr("EDS1")),
                               PAIR(ExtendedDynamicState, EDS2, tr("EDS2")),
                               PAIR(ExtendedDynamicState, EDS3, tr("EDS3")),
-                          }});
-
-    // FIXED: VRAM leak prevention - GC Aggressiveness dropdown options
-    translations->insert({Settings::EnumMetadata<Settings::GCAggressiveness>::Index(),
-                          {
-                              PAIR(GCAggressiveness, Off, tr("Off (Not Recommended)")),
-                              PAIR(GCAggressiveness, Light, tr("Light (Recommended)")),
                           }});
 
     translations->insert({Settings::EnumMetadata<Settings::RendererBackend>::Index(),

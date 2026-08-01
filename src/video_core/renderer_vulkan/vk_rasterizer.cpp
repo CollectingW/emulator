@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <exception>
 #include <memory>
 #include <mutex>
 
@@ -14,6 +15,7 @@
 #include "common/logging.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
+#include "video_core/arm64_register_guard.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/control/channel_state.h"
 #include "video_core/engines/draw_manager.h"
@@ -54,6 +56,37 @@ struct DrawParams {
     u32 first_index;
     bool is_indexed;
 };
+
+#if CITRON_ARM64_REGISTER_GUARD_SUPPORTED
+struct ConfigureCorruptionTag;
+
+thread_local std::exception_ptr pipeline_configure_exception;
+
+extern "C" __attribute__((noinline, no_stack_protector, used)) void
+CitronGraphicsPipelineConfigureThunk(GraphicsPipeline* pipeline, bool is_indexed) noexcept;
+
+extern "C" __attribute__((naked, noinline)) u32
+CitronGraphicsPipelineConfigurePreservingRegisters(GraphicsPipeline* pipeline, bool is_indexed);
+
+extern "C" __attribute__((noinline, no_stack_protector, used)) void
+CitronGraphicsPipelineConfigureThunk(GraphicsPipeline* pipeline, bool is_indexed) noexcept {
+    try {
+        pipeline->Configure(is_indexed);
+    } catch (...) {
+        pipeline_configure_exception = std::current_exception();
+    }
+}
+
+// Some Android Vulkan user drivers violate the AArch64 ABI and return with callee-saved
+// registers modified. Isolate GraphicsPipeline::Configure so a damaged RasterizerVulkan
+// pointer cannot be consumed by UpdateDynamicStates before the outer macro guard returns.
+// Bits 0-9 report x19-x28 respectively; bits 10-11 report lower/upper guard damage; bit 12
+// reports x29.
+extern "C" __attribute__((naked, noinline)) u32
+CitronGraphicsPipelineConfigurePreservingRegisters(GraphicsPipeline*, bool) {
+    CITRON_ARM64_PRESERVE_REGISTERS(CitronGraphicsPipelineConfigureThunk);
+}
+#endif
 
 VkViewport GetViewportState(const Device& device, const Tegra::Engines::Maxwell3D::Regs& regs,
                             size_t index, float scale) {
@@ -201,39 +234,6 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
       fence_manager(*this, gpu, texture_cache, buffer_cache, query_cache, device, scheduler),
       wfi_event(device.GetLogical().CreateEvent()) {
     scheduler.SetQueryCache(query_cache);
-
-    memory_allocator.SetMemoryPressureCallback([this]() {
-        std::scoped_lock lock{texture_cache.mutex, buffer_cache.mutex};
-
-        // Pipelines and cache resources may still be referenced by queued command buffers.
-        scheduler.Finish();
-        pipeline_cache.TriggerPipelineEviction();
-        try {
-            texture_cache.ForceEmergencyGC();
-            buffer_cache.TriggerGarbageCollection();
-        } catch (const vk::Exception& exception) {
-            if (exception.GetResult() != VK_ERROR_OUT_OF_DEVICE_MEMORY &&
-                exception.GetResult() != VK_ERROR_OUT_OF_HOST_MEMORY) {
-                throw;
-            }
-            // Buffer downloads performed by GC can themselves require a staging allocation. Keep
-            // the resources already evicted by this pass and finish the recovery sequence.
-            LOG_WARNING(Render_Vulkan,
-                        "A nested allocation failed during emergency cache eviction: {}",
-                        exception.what());
-        }
-        staging_pool.TriggerCacheRelease(MemoryUsage::Upload);
-        staging_pool.TriggerCacheRelease(MemoryUsage::Download);
-
-        // Cache eviction uses delayed destruction so resources referenced by queued GPU work remain
-        // alive. Buffer downloads above can also enqueue new work, so drain once more before
-        // flushing the rings; otherwise an immediate allocation retry would not actually regain
-        // the evicted memory.
-        scheduler.Finish();
-        texture_cache.FlushSentencedRings();
-        buffer_cache.FlushDelayedDestructionRing();
-        staging_pool.ReleaseAllFreeBuffers();
-    });
 }
 
 void RasterizerVulkan::Shutdown() {
@@ -282,17 +282,45 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
     if (!pipeline) {
         return;
     }
-    std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
-    // update engine as channel may be different.
-    pipeline->SetEngine(maxwell3d, gpu_memory);
-    pipeline->Configure(is_indexed);
+    std::exception_ptr configure_exception;
+    {
+        std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
+        // update engine as channel may be different.
+        pipeline->SetEngine(maxwell3d, gpu_memory);
+#if CITRON_ARM64_REGISTER_GUARD_SUPPORTED
+        if (Settings::values.android_arm64_register_guards.GetValue()) {
+            pipeline_configure_exception = {};
+            const u32 configure_corruption =
+                CitronGraphicsPipelineConfigurePreservingRegisters(pipeline, is_indexed);
+            configure_exception = pipeline_configure_exception;
+            pipeline_configure_exception = {};
+            if (configure_corruption != 0 &&
+                VideoCore::IsFirstArm64RegisterCorruption<13, ConfigureCorruptionTag>(
+                    configure_corruption)) {
+                LOG_ERROR(
+                    Render_Vulkan,
+                    "ARM64 GraphicsPipeline::Configure corrupted callee-saved state mask={:#x}",
+                    configure_corruption);
+            }
+        } else {
+            pipeline->Configure(is_indexed);
+        }
+#else
+        pipeline->Configure(is_indexed);
+#endif
 
-    UpdateDynamicStates();
+        if (!configure_exception) {
+            UpdateDynamicStates();
 
-    HandleTransformFeedback();
-    query_cache.CounterEnable(VideoCommon::QueryType::ZPassPixelCount64,
-                              maxwell3d->regs.zpass_pixel_count_enable);
-    draw_func();
+            HandleTransformFeedback();
+            query_cache.CounterEnable(VideoCommon::QueryType::ZPassPixelCount64,
+                                      maxwell3d->regs.zpass_pixel_count_enable);
+            draw_func();
+        }
+    }
+    if (configure_exception) {
+        std::rethrow_exception(configure_exception);
+    }
 }
 
 void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
@@ -854,6 +882,7 @@ void RasterizerVulkan::FlushCommands() {
 }
 
 void RasterizerVulkan::TickFrame() {
+    memory_allocator.TickFrame();
     draw_counter = 0;
     guest_descriptor_queue.TickFrame();
     compute_pass_descriptor_queue.TickFrame();
@@ -877,7 +906,7 @@ void RasterizerVulkan::TickFrame() {
 
 u64 RasterizerVulkan::GetTotalVram() const {
     try {
-        return device.GetDeviceMemoryUsage();
+        return device.GetDeviceMemoryBudget();
     } catch (...) {
         return 0;
     }
@@ -885,10 +914,10 @@ u64 RasterizerVulkan::GetTotalVram() const {
 
 u64 RasterizerVulkan::GetUsedVram() const {
     try {
-        u64 buffer_usage = buffer_cache_runtime.GetDeviceMemoryUsage();
-        u64 texture_usage = texture_cache_runtime.GetDeviceMemoryUsage();
-        u64 staging_usage = staging_pool.GetMemoryUsage();
-        return buffer_usage + texture_usage + staging_usage;
+        if (device.CanReportMemoryUsage()) {
+            return device.GetDeviceMemoryUsage();
+        }
+        return GetBufferMemoryUsage() + GetTextureMemoryUsage() + GetStagingMemoryUsage();
     } catch (...) {
         return 0;
     }
@@ -896,7 +925,8 @@ u64 RasterizerVulkan::GetUsedVram() const {
 
 u64 RasterizerVulkan::GetBufferMemoryUsage() const {
     try {
-        return buffer_cache_runtime.GetDeviceMemoryUsage();
+        std::scoped_lock lock{buffer_cache.mutex};
+        return buffer_cache.GetBufferVRAMStats().total_used_bytes;
     } catch (...) {
         return 0;
     }
@@ -904,7 +934,8 @@ u64 RasterizerVulkan::GetBufferMemoryUsage() const {
 
 u64 RasterizerVulkan::GetTextureMemoryUsage() const {
     try {
-        return texture_cache_runtime.GetDeviceMemoryUsage();
+        std::scoped_lock lock{texture_cache.mutex};
+        return texture_cache.GetVRAMStats().total_used_bytes;
     } catch (...) {
         return 0;
     }
@@ -916,16 +947,6 @@ u64 RasterizerVulkan::GetStagingMemoryUsage() const {
     } catch (...) {
         return 0;
     }
-}
-
-void RasterizerVulkan::TriggerMemoryGC() {
-    std::shared_lock shared_guard{shutdown_mutex};
-    if (is_shutting_down)
-        return;
-
-    std::scoped_lock lock{texture_cache.mutex, buffer_cache.mutex};
-    texture_cache.TriggerGarbageCollection();
-    buffer_cache.TriggerGarbageCollection();
 }
 
 bool RasterizerVulkan::AccelerateConditionalRendering() {

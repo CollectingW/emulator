@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <set>
 #include <span>
 #include <string>
@@ -441,6 +442,26 @@ public:
                features.descriptor_indexing.descriptorBindingStorageImageUpdateAfterBind;
     }
 
+    /// True if the device supports non-uniform indexing for sampled image arrays.
+    bool IsSampledImageArrayNonUniformIndexingSupported() const {
+        return features.descriptor_indexing.shaderSampledImageArrayNonUniformIndexing;
+    }
+
+    /// True if the device supports non-uniform indexing for storage image arrays.
+    bool IsStorageImageArrayNonUniformIndexingSupported() const {
+        return features.descriptor_indexing.shaderStorageImageArrayNonUniformIndexing;
+    }
+
+    /// True if the device supports non-uniform indexing for uniform texel buffer arrays.
+    bool IsUniformTexelBufferArrayNonUniformIndexingSupported() const {
+        return features.descriptor_indexing.shaderUniformTexelBufferArrayNonUniformIndexing;
+    }
+
+    /// True if the device supports non-uniform indexing for storage texel buffer arrays.
+    bool IsStorageTexelBufferArrayNonUniformIndexingSupported() const {
+        return features.descriptor_indexing.shaderStorageTexelBufferArrayNonUniformIndexing;
+    }
+
     /// Returns true if VK_KHR_pipeline_executable_properties is enabled.
     bool IsKhrPipelineExecutablePropertiesEnabled() const {
         return extensions.pipeline_executable_properties;
@@ -660,7 +681,16 @@ public:
         return extensions.memory_budget;
     }
 
+    /// Returns reported heap usage. When CanReportMemoryUsage() is false, 0 indicates unsupported
+    /// reporting rather than actual zero usage.
     u64 GetDeviceMemoryUsage() const;
+
+    /// Refreshes reported heap usage and budget; no-ops when CanReportMemoryUsage() is false.
+    void RefreshDeviceMemoryUsage(VmaAllocator vma_allocator) const;
+
+    /// Returns the reported heap budget. When CanReportMemoryUsage() is false, returns the
+    /// device_access_memory fallback rather than a reported budget.
+    u64 GetDeviceMemoryBudget() const;
 
     u32 GetSetsPerPool() const {
         return sets_per_pool;
@@ -736,22 +766,6 @@ public:
 
     NvidiaArchitecture GetNvidiaArch() const noexcept {
         return nvidia_arch;
-    }
-
-    // FIXED: Android Adreno 740 native ASTC eviction
-    /// Returns true if the device is an Adreno GPU (Qualcomm or Turnip driver)
-    [[nodiscard]] bool IsAdrenoGpu() const noexcept {
-        return is_adreno;
-    }
-
-    /// Returns true if the device is Adreno 7xx series or newer (Adreno 730, 740, 750+)
-    [[nodiscard]] bool IsAdreno7xxOrNewer() const noexcept {
-        return is_adreno_7xx_or_newer;
-    }
-
-    /// Returns true if the device supports native ASTC decoding and compressed size eviction
-    [[nodiscard]] bool SupportsNativeAstc() const noexcept {
-        return supports_native_astc;
     }
 
 private:
@@ -871,14 +885,11 @@ private:
     bool dynamic_state3_blending{};            ///< Has all blending features of dynamic_state3.
     bool dynamic_state3_enables{};             ///< Has all enables features of dynamic_state3.
     bool supports_conditional_barriers{};      ///< Allows barriers in conditional control flow.
+    mutable std::atomic<u64> device_memory_usage{};
+    mutable std::atomic<u64> device_memory_budget{};
     u64 device_access_memory{};                ///< Total size of device local memory in bytes.
     u32 sets_per_pool{};                       ///< Sets per Description Pool
     NvidiaArchitecture nvidia_arch{NvidiaArchitecture::Arch_AmpereOrNewer};
-
-    // FIXED: Android Adreno 740 native ASTC eviction
-    bool is_adreno{};                          ///< Is Adreno GPU (Qualcomm or Turnip driver)
-    bool is_adreno_7xx_or_newer{};             ///< Is Adreno 7xx series or newer
-    bool supports_native_astc{};               ///< Supports native ASTC with compressed eviction
 
     // Telemetry parameters
     std::set<std::string, std::less<>> supported_extensions; ///< Reported Vulkan extensions.
