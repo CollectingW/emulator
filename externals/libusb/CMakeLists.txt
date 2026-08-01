@@ -49,11 +49,18 @@ if (MINGW OR (${CMAKE_SYSTEM_NAME} MATCHES "Linux") OR APPLE)
     set(LIBUSB_MAKEFILE "${LIBUSB_PREFIX}/Makefile")
 
     if (MINGW)
-        set(LIBUSB_LIBRARIES "${LIBUSB_PREFIX}/libusb/.libs/libusb-1.0.dll.a" CACHE PATH "libusb library path" FORCE)
-        set(LIBUSB_SHARED_LIBRARY "${LIBUSB_PREFIX}/libusb/.libs/libusb-1.0.dll")
-        set(LIBUSB_SHARED_LIBRARY_DEST "${CMAKE_BINARY_DIR}/bin/libusb-1.0.dll")
+        # Always build the static archive on MinGW targets (both llvm-mingw
+        # cross-compile from Linux and native MSYS2 clang64 builds).
+        # Building only the static lib avoids the libusb-1.0.dll runtime
+        # dependency that caused "code execution cannot proceed" errors on
+        # Windows after the CopyMinGWDeps deployment step removed the DLL.
+        set(LIBUSB_LIBRARIES "${LIBUSB_PREFIX}/libusb/.libs/libusb-1.0.a" CACHE PATH "libusb library path" FORCE)
 
-        set(LIBUSB_CONFIGURE_ARGS --host=x86_64-w64-mingw32 --build=x86_64-windows)
+        set(LIBUSB_CONFIGURE_ARGS
+            --host=x86_64-w64-mingw32
+            --build=x86_64-windows
+            --disable-shared
+            --enable-static)
     else()
         set(LIBUSB_LIBRARIES "${LIBUSB_PREFIX}/libusb/.libs/libusb-1.0.a" CACHE PATH "libusb library path" FORCE)
     endif()
@@ -95,21 +102,12 @@ if (MINGW OR (${CMAKE_SYSTEM_NAME} MATCHES "Linux") OR APPLE)
             "${LIBUSB_SRC_DIR}"
     )
 
-    add_custom_command(
-        OUTPUT
-            "${LIBUSB_SHARED_LIBRARY_DEST}"
-        COMMAND
-            cp "${LIBUSB_SHARED_LIBRARY}" "${LIBUSB_SHARED_LIBRARY_DEST}"
-    )
-
     add_custom_target(usb-bootstrap DEPENDS "${LIBUSB_CONFIGURE}")
     add_custom_target(usb-configure DEPENDS "${LIBUSB_MAKEFILE}" usb-bootstrap)
     add_custom_target(usb-build ALL DEPENDS "${LIBUSB_LIBRARIES}" usb-configure)
-    # Workaround since static linking didn't work out -- We need to copy the DLL to the bin directory
-    add_custom_target(usb-copy ALL DEPENDS "${LIBUSB_SHARED_LIBRARY_DEST}" usb-build)
 
     add_library(usb INTERFACE)
-    add_dependencies(usb usb-copy)
+    add_dependencies(usb usb-build)
     target_link_libraries(usb INTERFACE "${LIBUSB_LIBRARIES}")
     target_include_directories(usb INTERFACE "${LIBUSB_INCLUDE_DIRS}")
 
