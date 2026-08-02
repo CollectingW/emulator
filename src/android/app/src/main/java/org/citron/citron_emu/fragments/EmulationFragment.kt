@@ -247,6 +247,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             }
 
             override fun onDrawerOpened(drawerView: View) {
+                InputHandler.releaseAllInputs()
                 binding.drawerLayout.setDrawerLockMode(DrawerLayout.LOCK_MODE_UNLOCKED)
                 binding.inGameMenu.requestFocus()
                 emulationViewModel.setDrawerOpen(true)
@@ -833,6 +834,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         Log.debug("[EmulationFragment] Surface changed. Resolution: " + width + "x" + height)
+        DisplayModeUtil.configureSurface(requireActivity(), holder.surface)
         emulationState.newSurface(holder.surface)
     }
 
@@ -1407,6 +1409,7 @@ class EmulationFragment : Fragment(), SurfaceHolder.Callback {
             if (state != State.PAUSED) {
                 Log.debug("[EmulationFragment] Pausing emulation.")
 
+                InputHandler.releaseAllInputs()
                 NativeLibrary.pauseEmulation()
 
                 state = State.PAUSED

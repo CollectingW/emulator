@@ -182,6 +182,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener {
 
     override fun onResume() {
         super.onResume()
+        DisplayModeUtil.preferHighestRefreshRate(this)
         nfcReader.startScanning()
         startMotionSensorListener()
         InputHandler.updateControllerData()
@@ -190,6 +191,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener {
     }
 
     override fun onPause() {
+        InputHandler.releaseAllInputs()
         super.onPause()
         nfcReader.stopScanning()
         stopMotionSensorListener()
@@ -247,6 +249,7 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener {
 
         // Don't attempt to do anything if we are disconnecting a device.
         if (event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            InputHandler.releaseAllInputs()
             return true
         }
 
@@ -470,7 +473,10 @@ class EmulationActivity : AppCompatActivity(), SensorEventListener {
             if (intent.action == actionPlay) {
                 if (NativeLibrary.isPaused()) NativeLibrary.unpauseEmulation()
             } else if (intent.action == actionPause) {
-                if (!NativeLibrary.isPaused()) NativeLibrary.pauseEmulation()
+                if (!NativeLibrary.isPaused()) {
+                    InputHandler.releaseAllInputs()
+                    NativeLibrary.pauseEmulation()
+                }
             }
             if (intent.action == actionUnmute) {
                 if (BooleanSetting.AUDIO_MUTED.getBoolean()) {
