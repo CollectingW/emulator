@@ -68,6 +68,10 @@ private:
                             const QStyleOptionViewItem& option, const QModelIndex& index) const;
     void PaintDefault(QPainter* painter, const QRect& rect, const QStyleOptionViewItem& option,
                       const QModelIndex& index) const;
+    // Nextendo online-count pill above the existing LDN text; falls through to PaintDefault when
+    // signed out or the title isn't Nextendo-tracked.
+    void PaintOnline(QPainter* painter, const QRect& rect, const QStyleOptionViewItem& option,
+                     const QModelIndex& index) const;
 
     // ---- Color helpers ----
     QColor CardBg() const;

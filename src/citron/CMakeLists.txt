@@ -260,6 +260,24 @@ add_executable(citron
     multiplayer/validation.h
     play_time_manager.cpp
     play_time_manager.h
+    nextendo_account_dialog.cpp
+    nextendo_account_dialog.h
+    nextendo_account_page_p.h
+    nextendo_avatar_cache.cpp
+    nextendo_avatar_cache.h
+    nextendo_controller.cpp
+    nextendo_controller.h
+    nextendo_friend_delegate.cpp
+    nextendo_friend_delegate.h
+    nextendo_compatible_titles.h
+    nextendo_history_delegate.cpp
+    nextendo_history_delegate.h
+    nextendo_network_probe.cpp
+    nextendo_network_probe.h
+    nextendo_online_counts.cpp
+    nextendo_online_counts.h
+    nextendo_toast.cpp
+    nextendo_toast.h
     precompiled_headers.h
     qt_common.cpp
     qt_common.h
@@ -328,6 +346,24 @@ if (CITRON_CRASH_DUMPS)
         unordered_dense::unordered_dense
     )
     target_compile_definitions(citron PRIVATE CITRON_CRASH_DUMPS)
+endif()
+
+if (CITRON_USE_AUTO_UPDATER)
+    target_sources(citron PRIVATE
+        updater/updater_service.cpp
+        updater/updater_service.h
+        updater/updater_dialog.cpp
+        updater/updater_dialog.h
+        updater/updater_dialog.ui
+    )
+
+    target_compile_definitions(citron PRIVATE
+        # Ensure _WIN32 is defined for moc processing on Windows
+        $<$<BOOL:${WIN32}>:_WIN32>
+        CITRON_USE_AUTO_UPDATER
+    )
+
+    target_link_libraries(citron PRIVATE Qt6::Network)
 endif()
 
 # Mod Manager functionality for downloading patches
