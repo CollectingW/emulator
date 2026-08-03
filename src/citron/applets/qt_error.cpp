@@ -80,6 +80,12 @@ void QtErrorDisplay::ShowCustomErrorText(Result error, std::string dialog_text,
                                          std::string fullscreen_text,
                                          FinishedCallback finished) const {
     callback = std::move(finished);
+    // [Nextendo] ResultSuccess = informational notice, skip the error framing.
+    if (error == ResultSuccess) {
+        emit MainWindowDisplayError(QString::fromStdString(dialog_text),
+                                    QString::fromStdString(fullscreen_text));
+        return;
+    }
     emit MainWindowDisplayError(
         tr("Error Code: %1-%2 (0x%3)")
             .arg(static_cast<u32>(error.GetModule()) + 2000, 4, 10, QChar::fromLatin1('0'))
