@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "core/hle/service/bcat/backend/network_backend.h"
 #include "core/hle/service/bcat/bcat_service.h"
 #include "core/hle/service/bcat/delivery_cache_progress_service.h"
 #include "core/hle/service/bcat/delivery_cache_storage_service.h"
@@ -13,7 +14,7 @@ namespace Service::BCAT {
 
 std::unique_ptr<BcatBackend> CreateBackendFromSettings([[maybe_unused]] Core::System& system,
                                                        DirectoryGetter getter) {
-    return std::make_unique<NullBcatBackend>(std::move(getter));
+    return std::make_unique<NetworkBcatBackend>(std::move(getter));
 }
 
 IServiceCreator::IServiceCreator(Core::System& system_, const char* name_)
