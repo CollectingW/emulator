@@ -153,6 +153,9 @@ class GMainWindow : public QMainWindow {
 public:
     void filterBarSetChecked(bool state);
     void UpdateUITheme();
+    void OfferNextendoByamlDownload(u64 title_id);
+    void NextendoByamlDownloadFromMenu(u64 title_id);
+    bool NextendoByamlRequired(u64 title_id) const;
     bool IsConfiguring() const {
         return m_is_configuring;
     }
@@ -477,6 +480,12 @@ private:
     std::string current_game_name;
 
     void SyncNextendoHistory();
+
+    bool NextendoByamlInstalled(u64 title_id) const;
+    bool NextendoByamlSkipped(u64 title_id) const;
+    void NextendoByamlMarkSkipped(u64 title_id) const;
+    bool NextendoByamlDownload(u64 title_id);
+    void RunNextendoByamlDownloadWithProgress(u64 title_id);
 
     bool user_flag_cmd_line = false;
     bool auto_paused = false;
