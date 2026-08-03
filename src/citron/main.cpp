@@ -201,6 +201,10 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/shader_notify.h"
 
+#ifdef CITRON_USE_AUTO_UPDATER
+#include "citron/updater/updater_dialog.h"
+#include "citron/updater/updater_service.h"
+#endif
 #include "citron/util/clickable_label.h"
 #include "citron/util/multiplayer_room_overlay.h"
 #include "citron/util/performance_overlay.h"
@@ -1916,7 +1920,7 @@ void GMainWindow::ConnectMenuEvents() {
         s32 status = 0;
         std::string app_field;
         if (!Common::NextendoAccount::IsLinked() ||
-            !Common::NextendoFriends::TakeLocalPresenceIfChanged(status, app_field)) {
+            !Common::NextendoFriends::TakeLocalPresenceForPublish(status, app_field)) {
             return;
         }
         const std::string app_id =
@@ -2015,6 +2019,7 @@ void GMainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Verify_installed_contents, &GMainWindow::OnVerifyInstalledContents);
     connect_menu(ui->action_Install_Firmware, &GMainWindow::OnInstallFirmware);
     connect_menu(ui->action_Install_Keys, &GMainWindow::OnInstallDecryptionKeys);
+    connect_menu(ui->action_Check_For_Updates, &GMainWindow::OnCheckForUpdates);
     connect_menu(ui->action_About, &GMainWindow::OnAbout);
 
     connect(ui->actionControllerOverlay, &QAction::triggered, this,
@@ -4316,7 +4321,7 @@ void GMainWindow::OnOpenSupport() {
                                   QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
 
         if (second_warning == QMessageBox::Yes) {
-            OpenURL(QUrl(QStringLiteral("https://discord.gg/axqZFEyzPQ")));
+            OpenURL(QUrl(QStringLiteral("https://discord.gg/JGJdAaMZuD")));
         }
     }
 }
@@ -5455,6 +5460,18 @@ void GMainWindow::OnInstallDecryptionKeys() {
 void GMainWindow::OnAbout() {
     AboutDialog aboutDialog(this);
     aboutDialog.exec();
+}
+
+void GMainWindow::OnCheckForUpdates() {
+#ifdef CITRON_USE_AUTO_UPDATER
+    auto* updater_dialog = new Updater::UpdaterDialog(this);
+    updater_dialog->setAttribute(Qt::WA_DeleteOnClose);
+    updater_dialog->show();
+    updater_dialog->CheckForUpdates();
+#else
+    QMessageBox::information(this, tr("Updates"),
+                             tr("The automatic updater is not enabled in this build."));
+#endif
 }
 
 void GMainWindow::OnToggleControllerOverlay() {
@@ -6981,6 +6998,29 @@ int main(int argc, char* argv[]) {
     if (QGuiApplication::platformName().startsWith(QStringLiteral("wayland"))) {
         Settings::values.is_wayland_platform.SetValue(true);
     }
+#endif
+
+#ifdef CITRON_USE_AUTO_UPDATER
+    std::filesystem::path app_dir =
+        std::filesystem::path(QCoreApplication::applicationDirPath().toStdString());
+
+#ifdef _WIN32
+    // On Windows, updates are applied by the helper script after the app exits.
+    std::filesystem::path staging_path = app_dir / "update_staging";
+    if (std::filesystem::exists(staging_path)) {
+        try {
+            std::filesystem::remove_all(staging_path);
+        } catch (...) {
+        }
+    }
+#else
+    if (Updater::UpdaterService::HasStagedUpdate(app_dir)) {
+        if (Updater::UpdaterService::ApplyStagedUpdate(app_dir)) {
+            QMessageBox::information(nullptr, QObject::tr("Update Applied"),
+                                     QObject::tr("Citron has been updated successfully!"));
+        }
+    }
+#endif
 #endif
 
     setlocale(LC_ALL, "C");

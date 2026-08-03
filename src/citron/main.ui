@@ -203,6 +203,8 @@
     <addaction name="separator"/>
     <addaction name="action_Open_Log_Folder"/>
     <addaction name="separator"/>
+    <addaction name="action_Check_For_Updates"/>
+    <addaction name="separator"/>
     <addaction name="action_About"/>
    </widget>
    <addaction name="menu_File"/>
@@ -268,6 +270,11 @@
   <action name="action_About">
    <property name="text">
     <string>&amp;About citron-neo: The switch fell off</string>
+   </property>
+  </action>
+  <action name="action_Check_For_Updates">
+   <property name="text">
+    <string>Check for &amp;Updates...</string>
    </property>
   </action>
   <action name="action_Single_Window_Mode">

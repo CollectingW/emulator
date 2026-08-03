@@ -65,6 +65,9 @@ class QtControllerSelectorDialog;
 class QtProfileSelectionDialog;
 class QtSoftwareKeyboardDialog;
 class QtNXWebEngineView;
+namespace Updater {
+class UpdaterDialog;
+}
 
 enum class StartGameType { Normal, Global };
 
@@ -336,6 +339,7 @@ private slots:
                                const std::filesystem::path& extract_path);
     void OnInstallDecryptionKeys();
     void OnAbout();
+    void OnCheckForUpdates();
     void OnToggleFilterBar();
     void OnToggleGridView();
     void OnToggleStatusBar();

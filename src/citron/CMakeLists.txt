@@ -346,6 +346,24 @@ if (CITRON_CRASH_DUMPS)
     target_compile_definitions(citron PRIVATE CITRON_CRASH_DUMPS)
 endif()
 
+if (CITRON_USE_AUTO_UPDATER)
+    target_sources(citron PRIVATE
+        updater/updater_service.cpp
+        updater/updater_service.h
+        updater/updater_dialog.cpp
+        updater/updater_dialog.h
+        updater/updater_dialog.ui
+    )
+
+    target_compile_definitions(citron PRIVATE
+        # Ensure _WIN32 is defined for moc processing on Windows
+        $<$<BOOL:${WIN32}>:_WIN32>
+        CITRON_USE_AUTO_UPDATER
+    )
+
+    target_link_libraries(citron PRIVATE Qt6::Network)
+endif()
+
 # Mod Manager functionality for downloading patches
 target_sources(citron PRIVATE
     mod_manager/gamebanana_service.cpp
