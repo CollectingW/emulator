@@ -105,6 +105,8 @@ add_library(common STATIC
     nextendo_account.h
     nextendo_friends.cpp
     nextendo_friends.h
+    nextendo_nat.cpp
+    nextendo_nat.h
     settings.cpp
     settings.h
     settings_common.cpp

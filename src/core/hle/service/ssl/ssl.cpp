@@ -16,6 +16,7 @@
 #include "core/hle/service/sm/sm.h"
 #include "core/hle/service/sockets/bsd.h"
 #include "core/hle/service/ssl/cert_store.h"
+#include "core/hle/service/ssl/nextendo_nat_rewrite.h"
 #include "core/hle/service/ssl/ssl.h"
 #include "core/hle/service/ssl/ssl_backend.h"
 #include "core/hle/service/ssl/ssl_types.h"
@@ -267,9 +268,17 @@ private:
 
     Result WriteImpl(size_t* out_size, std::span<const u8> data) {
         ASSERT_OR_EXECUTE(did_handshake, { return ResultInternalError; });
-        const Result res = backend->Write(out_size, data);
+
+        std::vector<u8> rewritten;
+        const bool did_rewrite = Service::SSL::TryFixupStationAddress(data, rewritten);
+        const std::span<const u8> send_data = did_rewrite ? std::span<const u8>(rewritten) : data;
+
+        const Result res = backend->Write(out_size, send_data);
+        if (did_rewrite && res.IsSuccess()) {
+            *out_size = data.size();
+        }
         LOG_DEBUG(Service_SSL, "Write {} bytes, res={}: {}", *out_size, res.raw,
-                  Common::HexToString(data.subspan(0, *out_size), false));
+                  Common::HexToString(send_data.subspan(0, send_data.size()), false));
         return res;
     }
 

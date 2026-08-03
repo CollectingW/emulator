@@ -20,6 +20,7 @@
 #include <openssl/rand.h>
 #include <openssl/sha.h>
 
+#include "common/hex_util.h"
 #include "common/logging.h"
 #include "common/nextendo_account.h"
 #include "common/string_util.h"
@@ -602,6 +603,8 @@ Friend ParseFriend(const nlohmann::json& json) {
         const auto decoded = Base64StdDecode(app_field_b64);
         out.app_field = std::string{reinterpret_cast<const char*>(decoded.data()), decoded.size()};
         out.app_id = presence->value("app_id", std::string{});
+        LOG_DEBUG(WebService, "[Nextendo] ParseFriend pid={} status={} app_field={}", out.pid,
+                 out.presence_status, Common::HexToString(decoded, false));
     }
     return out;
 }

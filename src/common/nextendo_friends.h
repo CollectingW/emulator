@@ -39,8 +39,9 @@ void SetLocalStatus(s32 status);
 s32 GetLocalStatus();
 std::string GetLocalAppField();
 
-// Hands out the local presence only when it changed since the last call, so the frontend can poll
-// cheaply without republishing the same state.
-bool TakeLocalPresenceIfChanged(s32& status, std::string& app_field);
+// Hands out the local presence when it changed, or periodically regardless of change to keep the
+// account server's presence TTL from expiring while the state is unchanged (e.g. idle in a hosted
+// room). False means neither condition applies yet -- don't publish.
+bool TakeLocalPresenceForPublish(s32& status, std::string& app_field);
 
 } // namespace Common::NextendoFriends

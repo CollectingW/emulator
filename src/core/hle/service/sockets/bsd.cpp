@@ -12,6 +12,8 @@
 
 #include <fmt/format.h>
 
+#include "common/hex_util.h"
+#include "common/nextendo_nat.h"
 #include "common/settings.h"
 #include "common/socket_types.h"
 #include "core/core.h"
@@ -114,7 +116,8 @@ std::string DescribePrudpLite(std::span<const u8> data) {
     static constexpr std::array<const char*, 5> type_names{"SYN", "CONNECT", "DATA", "DISCONNECT",
                                                             "PING"};
     if (data.size() < 12 || data[0] != 0x80) {
-        return {};
+        const auto head = data.subspan(0, std::min<size_t>(data.size(), 16));
+        return fmt::format("raw[{}]={}", data.size(), Common::HexToString(head, false));
     }
     const u16 type_flags = static_cast<u16>(data[8] | (data[9] << 8));
     const u8 type = type_flags & 0xF;
@@ -351,6 +354,28 @@ void BSD::PollWork::Response(HLERequestContext& ctx) {
     rb.PushEnum(bsd_errno);
 }
 
+void BSD::SelectWork::Execute(BSD* bsd) {
+    std::tie(ret, bsd_errno) =
+        bsd->SelectImpl(nfds, timeout, read_in, write_in, error_in, read_out, write_out, error_out);
+}
+
+void BSD::SelectWork::Response(HLERequestContext& ctx) {
+    if (read_out.size() > 0) {
+        ctx.WriteBuffer(read_out, 0);
+    }
+    if (write_out.size() > 0) {
+        ctx.WriteBuffer(write_out, 1);
+    }
+    if (error_out.size() > 0) {
+        ctx.WriteBuffer(error_out, 2);
+    }
+
+    IPC::ResponseBuilder rb{ctx, 4};
+    rb.Push(ResultSuccess);
+    rb.Push<s32>(ret);
+    rb.PushEnum(bsd_errno);
+}
+
 void BSD::AcceptWork::Execute(BSD* bsd) {
     std::tie(ret, bsd_errno) = bsd->AcceptImpl(fd, write_buffer);
 }
@@ -491,13 +516,22 @@ void BSD::Socket(HLERequestContext& ctx) {
 }
 
 void BSD::Select(HLERequestContext& ctx) {
-    LOG_DEBUG(Service, "(STUBBED) called");
+    IPC::RequestParser rp{ctx};
+    const s32 nfds = rp.Pop<s32>();
+    const s32 timeout = rp.Pop<s32>();
 
-    IPC::ResponseBuilder rb{ctx, 4};
+    LOG_DEBUG(Service, "called. nfds={} timeout={}", nfds, timeout);
 
-    rb.Push(ResultSuccess);
-    rb.Push<u32>(0); // ret
-    rb.Push<u32>(0); // bsd errno
+    ExecuteWork(ctx, SelectWork{
+                         .nfds = nfds,
+                         .timeout = timeout,
+                         .read_in = ctx.CanReadBuffer(0) ? ctx.ReadBuffer(0) : std::span<const u8>{},
+                         .write_in = ctx.CanReadBuffer(1) ? ctx.ReadBuffer(1) : std::span<const u8>{},
+                         .error_in = ctx.CanReadBuffer(2) ? ctx.ReadBuffer(2) : std::span<const u8>{},
+                         .read_out = std::vector<u8>(ctx.GetWriteBufferSize(0)),
+                         .write_out = std::vector<u8>(ctx.GetWriteBufferSize(1)),
+                         .error_out = std::vector<u8>(ctx.GetWriteBufferSize(2)),
+                     });
 }
 
 void BSD::Poll(HLERequestContext& ctx) {
@@ -783,9 +817,73 @@ void BSD::EventFd(HLERequestContext& ctx) {
     const u64 initval = rp.Pop<u64>();
     const u32 flags = rp.Pop<u32>();
 
-    LOG_WARNING(Service, "(STUBBED) called. initval={}, flags={}", initval, flags);
+    LOG_DEBUG(Service, "called. initval={} flags={}", initval, flags);
 
-    BuildErrnoResponse(ctx, Errno::SUCCESS);
+    // Real eventfd semantics, built out of a UDP socket connected to itself over loopback:
+    // Write() adds a datagram (readable/poll-worthy immediately), Read() drains the next one.
+    // Games use this as a self-pipe to wake a blocked Poll/Select from another thread (e.g. to
+    // interrupt a host's listen loop) -- without a real, pollable fd behind it, that signal goes
+    // nowhere and the listener never wakes for anything but its own socket traffic.
+    const s32 fd = FindFreeFileDescriptorHandle();
+    if (fd < 0) {
+        LOG_ERROR(Service, "No more file descriptors available");
+        IPC::ResponseBuilder rb{ctx, 4};
+        rb.Push(ResultSuccess);
+        rb.Push<s32>(-1);
+        rb.PushEnum(Errno::MFILE);
+        return;
+    }
+
+    auto socket = std::make_shared<Network::Socket>();
+    Network::Errno net_err = socket->Initialize(Network::Domain::INET, Network::Type::DGRAM,
+                                                Network::Protocol::UDP);
+    const Network::SockAddrIn loopback{
+        .family = Network::Domain::INET,
+        .ip = {127, 0, 0, 1},
+        .portno = 0,
+    };
+    if (net_err == Network::Errno::SUCCESS) {
+        net_err = socket->Bind(loopback);
+    }
+    Network::SockAddrIn bound{};
+    if (net_err == Network::Errno::SUCCESS) {
+        std::tie(bound, net_err) = socket->GetSockName();
+    }
+    if (net_err == Network::Errno::SUCCESS) {
+        bound.ip = loopback.ip;
+        net_err = socket->Connect(bound);
+    }
+    if (net_err != Network::Errno::SUCCESS) {
+        LOG_ERROR(Service, "Failed to create eventfd backing socket, errno={}",
+                  static_cast<int>(net_err));
+        IPC::ResponseBuilder rb{ctx, 4};
+        rb.Push(ResultSuccess);
+        rb.Push<s32>(-1);
+        rb.PushEnum(Translate(net_err));
+        return;
+    }
+
+    file_descriptors[fd] = FileDescriptor{};
+    FileDescriptor& descriptor = *file_descriptors[fd];
+    descriptor.socket = std::move(socket);
+    descriptor.domain = Network::Domain::INET;
+    descriptor.type = Network::Type::DGRAM;
+    descriptor.protocol = Network::Protocol::UDP;
+    descriptor.is_connection_based = true; // enables Write()/Send() without an explicit dest
+    descriptor.connected = true;
+
+    if (initval > 0) {
+        const u64 seed = initval;
+        descriptor.socket->Send(
+            std::span<const u8>{reinterpret_cast<const u8*>(&seed), sizeof(seed)}, 0);
+    }
+
+    LOG_INFO(Service, "[Nextendo] New eventfd fd={} initval={}", fd, initval);
+
+    IPC::ResponseBuilder rb{ctx, 4};
+    rb.Push(ResultSuccess);
+    rb.Push<s32>(fd);
+    rb.PushEnum(Errno::SUCCESS);
 }
 
 void BSD::RegisterClientShared(HLERequestContext& ctx) {
@@ -928,6 +1026,121 @@ std::pair<s32, Errno> BSD::PollImpl(std::vector<u8>& write_buffer, std::span<con
     std::memcpy(write_buffer.data(), fds.data(), nfds * sizeof(PollFD));
 
     return Translate(result);
+}
+
+namespace {
+// fd_set is a plain byte array, bit i (LSB-first within each byte) == fd i.
+void ExtractFdsFromMask(std::span<const u8> mask, std::vector<s32>& out) {
+    for (size_t byte_idx = 0; byte_idx < mask.size(); ++byte_idx) {
+        const u8 current = mask[byte_idx];
+        for (int bit = 0; bit < 8; ++bit) {
+            if (current & (1u << bit)) {
+                out.push_back(static_cast<s32>(byte_idx * 8 + bit));
+            }
+        }
+    }
+}
+
+void SetFdInMask(std::vector<u8>& mask, s32 fd) {
+    const size_t byte_idx = static_cast<size_t>(fd) / 8;
+    if (byte_idx < mask.size()) {
+        mask[byte_idx] |= static_cast<u8>(1u << (fd % 8));
+    }
+}
+} // Anonymous namespace
+
+std::pair<s32, Errno> BSD::SelectImpl(s32 nfds, s32 timeout, std::span<const u8> read_in,
+                                      std::span<const u8> write_in, std::span<const u8> error_in,
+                                      std::vector<u8>& read_out, std::vector<u8>& write_out,
+                                      std::vector<u8>& error_out) {
+    std::ranges::fill(read_out, 0);
+    std::ranges::fill(write_out, 0);
+    std::ranges::fill(error_out, 0);
+
+    std::vector<s32> read_fds;
+    std::vector<s32> write_fds;
+    std::vector<s32> error_fds;
+    ExtractFdsFromMask(read_in, read_fds);
+    ExtractFdsFromMask(write_in, write_fds);
+    ExtractFdsFromMask(error_in, error_fds);
+
+    if (nfds <= 0 || (read_fds.empty() && write_fds.empty() && error_fds.empty())) {
+        return {0, Errno::SUCCESS};
+    }
+
+    // One poll entry per unique fd, requesting whichever of In/Out it was asked about.
+    // Err/Hup/Nval come back from the host poll() unconditionally, regardless of what
+    // was requested, matching POSIX poll() semantics.
+    struct Entry {
+        s32 fd;
+        Network::PollEvents requested{};
+    };
+    std::vector<Entry> entries;
+    const auto add = [&](const std::vector<s32>& fds, Network::PollEvents event) {
+        for (const s32 fd : fds) {
+            const auto it =
+                std::ranges::find_if(entries, [fd](const Entry& e) { return e.fd == fd; });
+            if (it != entries.end()) {
+                it->requested |= event;
+            } else {
+                entries.push_back({fd, event});
+            }
+        }
+    };
+    add(read_fds, Network::PollEvents::In);
+    add(write_fds, Network::PollEvents::Out);
+
+    std::vector<s32> polled_fds;
+    std::vector<Network::PollFD> host_pollfds;
+    polled_fds.reserve(entries.size());
+    host_pollfds.reserve(entries.size());
+    for (const Entry& entry : entries) {
+        if (entry.fd < 0 || entry.fd >= static_cast<s32>(MAX_FD) || !file_descriptors[entry.fd] ||
+            !file_descriptors[entry.fd]->socket) {
+            continue;
+        }
+        polled_fds.push_back(entry.fd);
+        host_pollfds.push_back(Network::PollFD{
+            .socket = file_descriptors[entry.fd]->socket.get(),
+            .events = entry.requested,
+            .revents = Network::PollEvents{},
+        });
+    }
+
+    const auto [poll_ret, poll_errno] = Translate(Network::Poll(host_pollfds, timeout));
+    if (poll_errno != Errno::SUCCESS) {
+        return {poll_ret, poll_errno};
+    }
+
+    // error_fds only ever reports out-of-band/exceptional conditions; a plain closed/errored
+    // socket surfaces through the read or write set it was asked about, same as real select().
+    constexpr auto err_like =
+        Network::PollEvents::Err | Network::PollEvents::Hup | Network::PollEvents::Nval;
+    s32 ready = 0;
+    for (size_t i = 0; i < host_pollfds.size(); ++i) {
+        const s32 fd = polled_fds[i];
+        const Network::PollEvents revents = host_pollfds[i].revents;
+        bool counted = false;
+        if (True(host_pollfds[i].events & Network::PollEvents::In) &&
+            True(revents & (Network::PollEvents::In | err_like))) {
+            SetFdInMask(read_out, fd);
+            counted = true;
+        }
+        if (True(host_pollfds[i].events & Network::PollEvents::Out) &&
+            True(revents & (Network::PollEvents::Out | err_like))) {
+            SetFdInMask(write_out, fd);
+            counted = true;
+        }
+        if (True(revents & (Network::PollEvents::Err | Network::PollEvents::Hup))) {
+            SetFdInMask(error_out, fd);
+            counted = true;
+        }
+        if (counted) {
+            ++ready;
+        }
+    }
+
+    return {ready, Errno::SUCCESS};
 }
 
 std::pair<s32, Errno> BSD::AcceptImpl(s32 fd, std::vector<u8>& write_buffer) {
@@ -1315,6 +1528,13 @@ std::pair<s32, Errno> BSD::RecvFromImpl(s32 fd, u32 flags, std::vector<u8>& mess
                       addr_in.ip[1], addr_in.ip[2], addr_in.ip[3], addr_in.portno, ret,
                       DescribePrudpLite(std::span<const u8>{message.data(),
                                                             static_cast<size_t>(std::max(ret, 0))}));
+
+            // nncs reply is 4x u32 BE: [type][ext port][ext ip][server ip]. Remember the ext
+            // ip so nextendo_nat_rewrite.cpp can fix up ReplaceURL's stale station address.
+            if (ret == 16 && (addr_in.portno == 10025 || addr_in.portno == 10125)) {
+                Common::NextendoNat::SetObservedExternalIp(
+                    {message[8], message[9], message[10], message[11]});
+            }
         }
     }
 

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <queue>
+#include "common/hex_util.h"
 #include "common/logging.h"
 #include "common/uuid.h"
 #include "core/core.h"
@@ -11,6 +12,7 @@
 #include "core/hle/service/acc/errors.h"
 #include "common/nextendo_account.h"
 #include "common/nextendo_friends.h"
+#include "common/nextendo_nat.h"
 #include "core/hle/service/friend/friend.h"
 #include "core/hle/service/friend/friend_interface.h"
 #include "core/hle/service/ipc_helpers.h"
@@ -54,6 +56,49 @@ static_assert(offsetof(FriendImpl, presence) == 0x40);
 static_assert(offsetof(FriendImpl, is_favourite) == 0x120);
 static_assert(offsetof(FriendImpl, is_valid) == 0x128);
 #pragma pack(pop)
+
+// [Nextendo] InGame never leaves "0" for a hosted private battle even once NAT resolution is
+// confirmed (nextendo_nat_rewrite.h fixes the station data itself). Same-length in-place fix.
+bool FixupInGameFlag(std::string& app_field) {
+    if (!Common::NextendoNat::GetObservedExternalIp()) {
+        return false;
+    }
+
+    struct Token {
+        size_t offset;
+        std::string text;
+    };
+    std::vector<Token> tokens;
+    size_t pos = 0;
+    while (pos < app_field.size()) {
+        const size_t end = app_field.find('\0', pos);
+        const size_t token_end = end == std::string::npos ? app_field.size() : end;
+        if (token_end == pos) {
+            break; // an empty token marks the start of the zero-padded tail
+        }
+        tokens.push_back({pos, app_field.substr(pos, token_end - pos)});
+        pos = token_end + 1;
+    }
+
+    std::optional<std::string> mode;
+    std::optional<size_t> in_game_value_offset;
+    std::optional<std::string> in_game_value;
+    for (size_t i = 0; i + 1 < tokens.size(); i += 2) {
+        if (tokens[i].text == "Mode") {
+            mode = tokens[i + 1].text;
+        } else if (tokens[i].text == "InGame") {
+            in_game_value_offset = tokens[i + 1].offset;
+            in_game_value = tokens[i + 1].text;
+        }
+    }
+
+    if (mode != "cPrivate" || !in_game_value_offset || in_game_value != "0") {
+        return false;
+    }
+
+    app_field[*in_game_value_offset] = '1';
+    return true;
+}
 
 // The account server hands out NEX PIDs; the guest wants a Uid. Derive one deterministically so a
 // friend keeps the same Uid across launches. The high half matches what Ryujinx uses.
@@ -609,17 +654,23 @@ void IFriendService::UpdateUserPresence(HLERequestContext& ctx) {
         // online menu. Relaying that verbatim reports us offline mid-session, so floor it at
         // Online: this handler only runs while a game is up. The app_field is taken as-is,
         // since that is the title's own joinable-session data.
-        const auto status = std::max<s32>(static_cast<s32>(presence.status),
-                                          Common::NextendoFriends::PresenceOnline);
-        const auto app_field =
+        auto status = std::max<s32>(static_cast<s32>(presence.status),
+                                    Common::NextendoFriends::PresenceOnline);
+        auto app_field =
             std::string{reinterpret_cast<const char*>(presence.app_key_value.data()),
                         presence.app_key_value.size()};
+        if (FixupInGameFlag(app_field)) {
+            status = std::max<s32>(status, Common::NextendoFriends::PresenceOnlinePlay);
+            LOG_INFO(Service_Friend,
+                     "[Nextendo] Corrected InGame=0->1 in presence blob for a resolved private "
+                     "battle host (natf/natm confirmed via NAT-check)");
+        }
         Common::NextendoFriends::SetLocalPresence(status, app_field);
-        const auto app_field_nonzero =
-            std::ranges::any_of(presence.app_key_value, [](u8 b) { return b != 0; });
-        LOG_INFO(Service_Friend,
-                 "[Nextendo] UpdateUserPresence status={} -> {} app_field_nonzero={}",
-                 presence.status, status, app_field_nonzero);
+        LOG_INFO(Service_Friend, "[Nextendo] UpdateUserPresence status={} -> {} app_field={}",
+                 presence.status, status,
+                 Common::HexToString(
+                     std::span{reinterpret_cast<const u8*>(app_field.data()), app_field.size()},
+                     false));
     } else {
         LOG_WARNING(Service_Friend, "UpdateUserPresence called with no presence buffer");
     }
