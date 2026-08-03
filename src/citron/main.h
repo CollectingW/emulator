@@ -444,6 +444,7 @@ private:
     LoadingScreen* loading_screen;
     QTimer shutdown_timer;
     QTimer nextendo_presence_timer;
+    std::string nextendo_last_pushed_app_id;
     NextendoController* nextendo_controller = nullptr;
     NextendoToast* nextendo_toast = nullptr;
     OverlayDialog* shutdown_dialog{};

@@ -1,12 +1,16 @@
 // SPDX-FileCopyrightText: Copyright 2026 citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <cmath>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QClipboard>
+#include <QComboBox>
 #include <QCursor>
 #include <QEvent>
 #include <QFont>
@@ -224,14 +228,27 @@ NextendoAccountDialog::NextendoAccountDialog(NextendoController* controller_, QW
     add_row->addWidget(friend_code_input);
     add_row->addWidget(add_button);
 
+    friend_search = new QLineEdit;
+    friend_search->setPlaceholderText(tr("Search friends..."));
+    friend_search->setClearButtonEnabled(true);
+
     friends_view = MakeCardList(this);
     friends_model = new QStandardItemModel(this);
     friends_view->setModel(friends_model);
     friend_delegate = new NextendoFriendDelegate(friends_view, this);
     friends_view->setItemDelegate(friend_delegate);
     connect(friends_view, &QListView::clicked, this, &NextendoAccountDialog::OnFriendsViewClicked);
+    connect(friend_search, &QLineEdit::textChanged, this, &NextendoAccountDialog::ApplyFriendFilter);
+
+    auto* friends_page = new QWidget;
+    auto* friends_page_layout = new QVBoxLayout(friends_page);
+    friends_page_layout->setContentsMargins(0, 0, 0, 0);
+    friends_page_layout->setSpacing(8);
+    friends_page_layout->addWidget(friend_search);
+    friends_page_layout->addWidget(friends_view, 1);
+
     friends_stack = new QStackedWidget;
-    friends_stack->addWidget(friends_view);
+    friends_stack->addWidget(friends_page);
     friends_stack->addWidget(MakeEmptyLabel(tr("No friends yet — add one by friend code above.")));
 
     requests_view = MakeCardList(this);
@@ -261,13 +278,33 @@ NextendoAccountDialog::NextendoAccountDialog(NextendoController* controller_, QW
     status = new QLabel;
     status->setWordWrap(true);
 
+    auto* notifications_toggle = new QCheckBox(tr("Notifications"));
+    notifications_toggle->setChecked(UISettings::values.nextendo_notifications_enabled.GetValue());
+    connect(notifications_toggle, &QCheckBox::toggled, this,
+            [](bool checked) { UISettings::values.nextendo_notifications_enabled.SetValue(checked); });
+
+    auto* notification_corner = new QComboBox;
+    notification_corner->addItem(tr("Top Right"));
+    notification_corner->addItem(tr("Top Left"));
+    notification_corner->addItem(tr("Bottom Right"));
+    notification_corner->addItem(tr("Bottom Left"));
+    notification_corner->setCurrentIndex(
+        std::clamp(UISettings::values.nextendo_notification_corner.GetValue(), 0, 3));
+    connect(notification_corner, &QComboBox::currentIndexChanged, this,
+            [](int index) { UISettings::values.nextendo_notification_corner.SetValue(index); });
+
+    auto* status_row = new QHBoxLayout;
+    status_row->addWidget(status, 1);
+    status_row->addWidget(notifications_toggle);
+    status_row->addWidget(notification_corner);
+
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(14, 14, 14, 14);
     layout->setSpacing(12);
     layout->addWidget(header_card);
     layout->addLayout(add_row);
     layout->addWidget(tabs, 1);
-    layout->addWidget(status);
+    layout->addLayout(status_row);
 
     connect(add_button, &QPushButton::clicked, this, &NextendoAccountDialog::OnAdd);
     connect(friend_code_input, &QLineEdit::returnPressed, this, &NextendoAccountDialog::OnAdd);
@@ -277,6 +314,10 @@ NextendoAccountDialog::NextendoAccountDialog(NextendoController* controller_, QW
 
     RefreshFriends();
     RefreshHistory();
+
+    refresh_timer.setInterval(15000);
+    connect(&refresh_timer, &QTimer::timeout, this, &NextendoAccountDialog::RefreshFriends);
+    refresh_timer.start();
 
 #ifdef ENABLE_WEB_SERVICE
     std::thread{[this] {
@@ -314,6 +355,14 @@ void NextendoAccountDialog::SetBusy(bool busy) {
 
 u64 NextendoAccountDialog::SelectedPid(const QModelIndex& index) const {
     return index.isValid() ? index.data(NextendoFriendItem::PidRole).toULongLong() : 0;
+}
+
+void NextendoAccountDialog::ApplyFriendFilter(const QString& text) {
+    for (int row = 0; row < friends_model->rowCount(); ++row) {
+        const QString name =
+            friends_model->index(row, 0).data(NextendoFriendItem::NameRole).toString();
+        friends_view->setRowHidden(row, !text.isEmpty() && !name.contains(text, Qt::CaseInsensitive));
+    }
 }
 
 void NextendoAccountDialog::OnFriendsViewClicked(const QModelIndex& index) {
@@ -412,7 +461,7 @@ void NextendoAccountDialog::RefreshFriends() {
 
         QMetaObject::invokeMethod(
             this,
-            [this, list = std::move(fetched)] {
+            [this, list = std::move(fetched)]() mutable {
                 SetBusy(false);
                 friends_model->clear();
                 requests_model->clear();
@@ -421,6 +470,40 @@ void NextendoAccountDialog::RefreshFriends() {
                     status->setText(QString::fromStdString(list.error));
                     return;
                 }
+
+                const std::string local_app_id = controller ? controller->GetLocalAppId() : std::string{};
+                std::unordered_map<std::string, int> group_size;
+                for (const auto& entry : list.friends) {
+                    if (entry.presence_status != 0 && !entry.app_id.empty()) {
+                        ++group_size[entry.app_id];
+                    }
+                }
+                // Rank: 0 = playing what I'm playing, 1..N = other games (bigger group first),
+                // N+1 = online with no game, N+2 = offline. Name breaks ties within a rank.
+                const auto rank = [&](const WebService::NextendoApi::Friend& f) -> int {
+                    if (f.presence_status == 0) {
+                        return static_cast<int>(group_size.size()) + 2;
+                    }
+                    if (f.app_id.empty()) {
+                        return static_cast<int>(group_size.size()) + 1;
+                    }
+                    if (!local_app_id.empty() && f.app_id == local_app_id) {
+                        return 0;
+                    }
+                    return 1; // refined below by group size, same tier is fine for a stable sort
+                };
+                std::stable_sort(list.friends.begin(), list.friends.end(),
+                                 [&](const WebService::NextendoApi::Friend& a, const WebService::NextendoApi::Friend& b) {
+                                     const int ra = rank(a);
+                                     const int rb = rank(b);
+                                     if (ra != rb) {
+                                         return ra < rb;
+                                     }
+                                     if (ra == 1 && a.app_id != b.app_id) {
+                                         return group_size[a.app_id] > group_size[b.app_id];
+                                     }
+                                     return a.name < b.name;
+                                 });
 
                 for (const auto& entry : list.friends) {
                     const QString game =
@@ -443,6 +526,7 @@ void NextendoAccountDialog::RefreshFriends() {
 
                 friends_stack->setCurrentIndex(friends_model->rowCount() > 0 ? 0 : 1);
                 requests_stack->setCurrentIndex(requests_model->rowCount() > 0 ? 0 : 1);
+                ApplyFriendFilter(friend_search->text());
             },
             Qt::QueuedConnection);
     }}.detach();
@@ -465,9 +549,21 @@ void NextendoAccountDialog::RefreshHistory() {
             [this, list = std::move(fetched)] {
                 history_model->clear();
                 for (const auto& entry : list.entries) {
+                    // The server only knows what the client last uploaded, which can be a raw
+                    // NCA filename or a missing icon; the locally installed game (it must be
+                    // installed, we have it in our own history) has the real name/icon, same
+                    // source the game list itself renders from.
+                    const QString local_name =
+                        controller ? controller->ResolveGameName(entry.title_id) : QString{};
+                    const QString local_icon =
+                        controller ? controller->ResolveGameIcon(entry.title_id) : QString{};
+                    const QString name = (!local_name.isEmpty() && local_name != tr("a game"))
+                                             ? local_name
+                                             : QString::fromStdString(entry.name);
+                    const QString icon =
+                        !local_icon.isEmpty() ? local_icon : QString::fromStdString(entry.icon_base64);
                     history_model->appendRow(new NextendoHistoryItem(
-                        QString::fromStdString(entry.title_id), QString::fromStdString(entry.name),
-                        QString::fromStdString(entry.icon_base64), entry.seconds,
+                        QString::fromStdString(entry.title_id), name, icon, entry.seconds,
                         QString::fromStdString(entry.last_played)));
                 }
                 history_stack->setCurrentIndex(history_model->rowCount() > 0 ? 0 : 1);

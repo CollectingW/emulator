@@ -1917,15 +1917,26 @@ void GMainWindow::ConnectMenuEvents() {
     nextendo_presence_timer.setInterval(5000);
     connect(&nextendo_presence_timer, &QTimer::timeout, this, [this] {
 #ifdef ENABLE_WEB_SERVICE
-        s32 status = 0;
-        std::string app_field;
-        if (!Common::NextendoAccount::IsLinked() ||
-            !Common::NextendoFriends::TakeLocalPresenceForPublish(status, app_field)) {
+        if (!Common::NextendoAccount::IsLinked()) {
             return;
         }
         const std::string app_id =
             emulation_running ? fmt::format("{:016X}", play_time_manager->GetProgramId())
                               : std::string{};
+        const bool app_id_changed = app_id != nextendo_last_pushed_app_id;
+
+        s32 status = 0;
+        std::string app_field;
+        const bool have_update = Common::NextendoFriends::TakeLocalPresenceForPublish(status, app_field);
+        if (!have_update && !app_id_changed) {
+            return;
+        }
+        if (!have_update) {
+            status = Common::NextendoFriends::GetLocalStatus();
+            app_field = Common::NextendoFriends::GetLocalAppField();
+        }
+
+        nextendo_last_pushed_app_id = app_id;
         std::thread{[status, app_field, app_id] {
             WebService::NextendoApi::PushPresence(status, app_field, app_id);
         }}.detach();
@@ -1972,19 +1983,22 @@ void GMainWindow::ConnectMenuEvents() {
                   const QString& avatar_base64) {
                 const QString detail =
                     game_name.isEmpty() ? tr("is now online") : tr("is now playing %1").arg(game_name);
-                nextendo_toast->Show(name, detail, avatar_base64);
+                nextendo_toast->Show(name, detail, avatar_base64, NextendoToast::Kind::Online);
             });
     connect(nextendo_controller, &NextendoController::FriendWentOffline, this,
             [this](u64 /*pid*/, const QString& name, const QString& avatar_base64) {
-                nextendo_toast->Show(name, tr("is now offline"), avatar_base64);
+                nextendo_toast->Show(name, tr("is now offline"), avatar_base64,
+                                     NextendoToast::Kind::Offline);
             });
     connect(nextendo_controller, &NextendoController::FriendRequestReceived, this,
             [this](u64 /*pid*/, const QString& name, const QString& avatar_base64) {
-                nextendo_toast->Show(name, tr("sent you a friend request"), avatar_base64);
+                nextendo_toast->Show(name, tr("sent you a friend request"), avatar_base64,
+                                     NextendoToast::Kind::Request);
             });
     connect(nextendo_controller, &NextendoController::FriendRequestSent, this,
             [this](const QString& friend_code) {
-                nextendo_toast->Show(tr("Friend Request Sent!"), friend_code, {});
+                nextendo_toast->Show(tr("Friend Request Sent!"), friend_code, {},
+                                     NextendoToast::Kind::RequestSent);
             });
     connect(ui->action_Connect_To_Room, &QAction::triggered, multiplayer_state,
             &MultiplayerState::OnDirectConnectToRoom);
@@ -6501,19 +6515,18 @@ void GMainWindow::UpdateUITheme() {
 #endif
     }
 
-    // Always load the stylesheet unless the theme is the true default (no explicit QSS)
+    // Combined with final_global_style below and applied once; a second setStyleSheet() call used
+    // to clobber this and drop the theme's own QDialog/QMessageBox colors (Windows white-on-white).
+    QString base_theme_style;
     if (current_theme != QStringLiteral("default")) {
         QString theme_uri{QStringLiteral(":%1/style.qss").arg(current_theme)};
         QFile f(theme_uri);
         if (!f.open(QFile::ReadOnly | QFile::Text)) {
             LOG_ERROR(Frontend, "Unable to open style \"{}\", fallback to empty stylesheet",
                       current_theme.toStdString());
-            qApp->setStyleSheet(QStringLiteral(""));
         } else {
-            qApp->setStyleSheet(QString::fromUtf8(f.readAll()));
+            base_theme_style = QString::fromUtf8(f.readAll());
         }
-    } else {
-        qApp->setStyleSheet(QStringLiteral(""));
     }
 
     // Refresh status bar style to follow the theme (Silver for Light, Onyx for Dark)
@@ -6566,18 +6579,6 @@ void GMainWindow::UpdateUITheme() {
     const double toolbar_lum = (0.299 * toolbar_bg_color.red() + 0.587 * toolbar_bg_color.green() + 0.114 * toolbar_bg_color.blue()) / 255.0;
     const QString toolbar_fg_hex = QString::fromStdString(UISettings::values.custom_toolbar_text_color.GetValue());
     const QString toolbar_fg = QColor(toolbar_fg_hex).isValid() ? toolbar_fg_hex : (toolbar_lum > 0.5 ? QStringLiteral("#1a1a1e") : QStringLiteral("#ffffff"));
-
-    // Reset qApp stylesheet to the base theme before applying dynamic overrides
-    // This prevents the stylesheet from growing indefinitely on every theme update
-    if (current_theme != default_theme_name) {
-        QString theme_uri{QStringLiteral(":%1/style.qss").arg(current_theme)};
-        QFile f(theme_uri);
-        if (f.open(QFile::ReadOnly | QFile::Text)) {
-            qApp->setStyleSheet(QString::fromUtf8(f.readAll()));
-        }
-    } else {
-        qApp->setStyleSheet(QStringLiteral(""));
-    }
 
     const QString toolbar_bg = QStringLiteral("rgba(%1,%2,%3,%4)").arg(toolbar_bg_color.red()).arg(toolbar_bg_color.green()).arg(toolbar_bg_color.blue()).arg(toolbar_bg_color.alpha());
     const QString toolbar_border = is_dark ? QStringLiteral("rgba(255,255,255,0.1)") : QStringLiteral("rgba(0,0,0,0.1)");
@@ -6676,11 +6677,10 @@ void GMainWindow::UpdateUITheme() {
 
     // Apply to qApp to ensure context menus and tooltips are captured globally
     // We use !important and both 'background' and 'background-color' to force opacity
-    const QString final_global_style =
-        global_style + QStringLiteral("QToolTip, QTipLabel { background: %1 !important; background-color: %1 !important; border: 1px solid %2 !important; }")
+    const QString final_global_style = base_theme_style + global_style +
+        QStringLiteral("QToolTip, QTipLabel { background: %1 !important; background-color: %1 !important; border: 1px solid %2 !important; }")
             .arg(tooltip_bg, tooltip_border);
-    
-    // Completely reset the app stylesheet to prevent bloat and ensure our overrides win
+
     qApp->setStyleSheet(final_global_style);
 
     emit UpdateThemedIcons();

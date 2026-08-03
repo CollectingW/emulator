@@ -27,8 +27,14 @@ public:
 
     bool IsLinked() const;
 
-    // Title id -> display name via the locally installed game's NACP; empty if nothing running.
+    // Title id -> display name via the locally installed game's NACP; empty if not installed.
     QString ResolveGameName(const std::string& app_id_hex) const;
+
+    // Title id -> base64 icon via the locally installed game's NACP; empty if not installed.
+    QString ResolveGameIcon(const std::string& app_id_hex) const;
+
+    // 16 hex digits of the locally running title, matching Friend::app_id; empty if not running.
+    std::string GetLocalAppId() const;
 
     void SignIn();
     void SignOut();

@@ -6,6 +6,7 @@
 #include <functional>
 #include <string>
 #include <QDialog>
+#include <QTimer>
 
 #include "common/common_types.h"
 
@@ -40,6 +41,7 @@ private:
 
     void OnFriendsViewClicked(const QModelIndex& index);
     u64 SelectedPid(const QModelIndex& index) const;
+    void ApplyFriendFilter(const QString& text);
 
     NextendoController* controller;
 
@@ -62,4 +64,7 @@ private:
 
     QLineEdit* friend_code_input;
     QPushButton* add_button;
+
+    QLineEdit* friend_search;
+    QTimer refresh_timer;
 };

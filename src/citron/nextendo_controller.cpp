@@ -4,8 +4,11 @@
 #include <thread>
 #include <utility>
 
+#include <QByteArray>
 #include <QDesktopServices>
 #include <QUrl>
+
+#include <fmt/format.h>
 
 #include "common/logging.h"
 #include "common/nextendo_account.h"
@@ -13,6 +16,7 @@
 #include "core/core.h"
 #include "core/file_sys/control_metadata.h"
 #include "core/file_sys/patch_manager.h"
+#include "core/file_sys/vfs/vfs.h"
 #include "core/hle/service/acc/profile_manager.h"
 #include "citron/nextendo_controller.h"
 
@@ -61,6 +65,43 @@ QString NextendoController::ResolveGameName(const std::string& app_id_hex) const
         }
     }
     return tr("a game");
+}
+
+QString NextendoController::ResolveGameIcon(const std::string& app_id_hex) const {
+    if (app_id_hex.empty()) {
+        return {};
+    }
+
+    u64 program_id = 0;
+    try {
+        program_id = std::stoull(app_id_hex, nullptr, 16);
+    } catch (const std::exception&) {
+        return {};
+    }
+    if (program_id == 0) {
+        return {};
+    }
+
+    const FileSys::PatchManager pm{program_id, system.GetFileSystemController(),
+                                   system.GetContentProvider()};
+    const auto [nacp, icon_file] = pm.GetControlMetadata();
+    if (!icon_file) {
+        return {};
+    }
+    const std::vector<u8> icon_bytes = icon_file->ReadAllBytes();
+    if (icon_bytes.empty()) {
+        return {};
+    }
+    return QString::fromLatin1(QByteArray::fromRawData(
+        reinterpret_cast<const char*>(icon_bytes.data()), static_cast<int>(icon_bytes.size()))
+                                    .toBase64());
+}
+
+std::string NextendoController::GetLocalAppId() const {
+    if (!system.IsPoweredOn()) {
+        return {};
+    }
+    return fmt::format("{:016X}", system.GetApplicationProcessProgramID());
 }
 
 void NextendoController::SignIn() {

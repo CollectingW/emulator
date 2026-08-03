@@ -164,6 +164,11 @@ namespace UISettings {
                                     // in a 'backup' folder next to the main AppImage.
                                     Setting<std::string> updater_backup_path{linkage, "", "updater/backupPath", Category::Ui};
 
+                                    Setting<bool> nextendo_notifications_enabled{linkage, true, "nextendo/notificationsEnabled", Category::Ui};
+
+                                    // 0 = top-right, 1 = top-left, 2 = bottom-right, 3 = bottom-left. See NextendoToast::Corner.
+                                    Setting<int> nextendo_notification_corner{linkage, 0, "nextendo/notificationCorner", Category::Ui};
+
                                     // logging
                                     Setting<bool> show_console{linkage, false, "showConsole", Category::Ui};
 

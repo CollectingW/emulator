@@ -12,17 +12,21 @@ class QPropertyAnimation;
 class QPaintEvent;
 class QMouseEvent;
 
-// Passive "<friend> is now playing <game>" popup, top-right of the main window. No invite
-// action, dismisses on timeout or click. Only shown while main_window is active and not
-// minimized -- see NextendoToast::Show.
+// Passive "<friend> is now playing <game>" popup, corner of the main window (user-configurable,
+// see UISettings::values.nextendo_notification_corner). No invite action, dismisses on timeout
+// or click. Only shown while main_window is active and not minimized -- see NextendoToast::Show.
 class NextendoToast : public QWidget {
     Q_OBJECT
 
 public:
+    enum class Corner { TopRight, TopLeft, BottomRight, BottomLeft };
+    enum class Kind { Online, Offline, Request, RequestSent };
+
     explicit NextendoToast(QWidget* main_window);
     ~NextendoToast() override;
 
-    void Show(const QString& headline, const QString& detail, const QString& avatar_base64);
+    void Show(const QString& headline, const QString& detail, const QString& avatar_base64,
+             Kind kind = Kind::Online);
 
 protected:
     void paintEvent(QPaintEvent*) override;
@@ -32,12 +36,17 @@ private:
     void Reposition();
     void HideAnimated();
     float ComputeScale() const;
+    Corner CurrentCorner() const;
+    QColor AccentColor() const;
+    QString CategoryLabel() const;
 
     QWidget* main_window;
     QTimer auto_hide_timer;
     QPropertyAnimation* fade;
+    QPropertyAnimation* slide;
     QPixmap avatar;
     QString line1;
     QString line2;
+    Kind kind = Kind::Online;
     float scale = 1.0f; // recomputed per Show() from the current screen's resolution
 };

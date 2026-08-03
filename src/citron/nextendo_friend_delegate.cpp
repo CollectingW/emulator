@@ -76,7 +76,9 @@ void NextendoFriendDelegate::paint(QPainter* painter, const QStyleOptionViewItem
 
 QRect NextendoFriendDelegate::ActionsRect(const QRect& card_rect) const {
     constexpr int width = 132;
-    return QRect(card_rect.right() - width, card_rect.top(), width, card_rect.height());
+    constexpr int right_margin = 14;
+    return QRect(card_rect.right() - right_margin - width, card_rect.top(), width,
+                card_rect.height());
 }
 
 NextendoFriendDelegate::ActionHit NextendoFriendDelegate::HitTestActions(const QRect& cell_rect,
