@@ -128,6 +128,8 @@ add_library(core STATIC
     file_sys/romfs.h
     file_sys/romfs_factory.cpp
     file_sys/romfs_factory.h
+    file_sys/zip_reader.cpp
+    file_sys/zip_reader.h
     file_sys/directory_save_data_filesystem.cpp
     file_sys/directory_save_data_filesystem.h
     file_sys/fs_path_normalizer.cpp
@@ -572,6 +574,8 @@ add_library(core STATIC
     hle/service/audio/hardware_opus_decoder.h
     hle/service/bcat/backend/backend.cpp
     hle/service/bcat/backend/backend.h
+    hle/service/bcat/backend/network_backend.cpp
+    hle/service/bcat/backend/network_backend.h
     hle/service/bcat/bcat.cpp
     hle/service/bcat/bcat.h
     hle/service/bcat/bcat_result.h
