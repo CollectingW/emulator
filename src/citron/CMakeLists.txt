@@ -322,6 +322,10 @@ add_executable(citron
     ui/game_grid_view.h
     ui/game_carousel_view.cpp
     ui/game_carousel_view.h
+    ui/nextendo_profile_chip.cpp
+    ui/nextendo_profile_chip.h
+    ui/nextendo_status_cluster.cpp
+    ui/nextendo_status_cluster.h
     ui/game_tree_view.cpp
     ui/game_tree_view.h
     ui/nav_settings_overlay.cpp
