@@ -349,7 +349,10 @@ void HLE_DrawIndexedIndirect::Fallback(Engines::Maxwell3D& maxwell3d, std::span<
     // wildly exceeding what's actually bound -- a base_vertex past the real vertex buffer
     // reads garbage position/normal/UV data, producing exploded-looking black geometry.
     // Clamp both to what's really there instead of trusting them blindly.
-    const u32 real_index_count = std::min(parameters[1], u32(maxwell3d.EstimateIndexBufferSize()));
+    const u32 index_buffer_size = u32(maxwell3d.EstimateIndexBufferSize());
+    const u32 real_index_count = std::min(parameters[1], index_buffer_size);
+    // Same class as firstIndex in IndirectDrawClampPass's GPU-side buffer -- never clamped here.
+    const u32 index_first = parameters[3] < index_buffer_size ? parameters[3] : 0;
     const u32 element_base = parameters[4] < maxwell3d.GetMaxCurrentVertices() ? parameters[4] : 0;
     maxwell3d.regs.vertex_id_base = element_base;
     maxwell3d.regs.global_base_vertex_index = element_base;
@@ -360,7 +363,7 @@ void HLE_DrawIndexedIndirect::Fallback(Engines::Maxwell3D& maxwell3d, std::span<
         maxwell3d.SetHLEReplacementAttributeType(0, 0x640, Maxwell3D::HLEReplacementAttributeType::BaseVertex);
         maxwell3d.SetHLEReplacementAttributeType(0, 0x644, Maxwell3D::HLEReplacementAttributeType::BaseInstance);
     }
-    maxwell3d.draw_manager->DrawIndex(Tegra::Maxwell3D::Regs::PrimitiveTopology(parameters[0]), parameters[3], real_index_count, element_base, base_instance, instance_count);
+    maxwell3d.draw_manager->DrawIndex(Tegra::Maxwell3D::Regs::PrimitiveTopology(parameters[0]), index_first, real_index_count, element_base, base_instance, instance_count);
     maxwell3d.regs.vertex_id_base = 0x0;
     maxwell3d.regs.global_base_vertex_index = 0x0;
     maxwell3d.regs.global_base_instance_index = 0x0;
@@ -442,13 +445,24 @@ void HLE_MultiDrawIndexedIndirectCount::Fallback(Engines::Maxwell3D& maxwell3d, 
     const std::size_t first_draw = start_indirect;
     const std::size_t effective_draws = end_indirect - start_indirect;
     const std::size_t last_draw = start_indirect + (std::min)(effective_draws, max_draws);
+    // Same unclamped-parameter corruption as the other HLE draw macros -- none of these per-draw
+    // fields were validated at all before. Same clamp pattern: real bound where one exists
+    // (index/vertex buffer size), flat sane ceiling for base_instance otherwise.
+    const u32 index_buffer_size = u32(maxwell3d.EstimateIndexBufferSize());
+    const u32 max_vertices = maxwell3d.GetMaxCurrentVertices();
+    static constexpr u32 MaxSaneInstanceCount = 512;
+    static constexpr u32 MaxSaneInstanceOffset = 100'000;
     for (std::size_t index = first_draw; index < last_draw; index++) {
         const std::size_t base = index * indirect_words + 5;
         if (base + 4 >= parameters.size()) {
             break;
         }
-        const u32 base_vertex = parameters[base + 3];
-        const u32 base_instance = parameters[base + 4];
+        const u32 index_count = std::min(parameters[base], index_buffer_size);
+        const u32 instance_count = std::min(parameters[base + 1] & 0xFFFF, MaxSaneInstanceCount);
+        const u32 index_first = parameters[base + 2] < index_buffer_size ? parameters[base + 2] : 0;
+        const u32 base_vertex = parameters[base + 3] < max_vertices ? parameters[base + 3] : 0;
+        const u32 base_instance =
+            parameters[base + 4] < MaxSaneInstanceOffset ? parameters[base + 4] : 0;
         maxwell3d.regs.vertex_id_base = base_vertex;
         maxwell3d.engine_state = Maxwell3D::EngineHint::OnHLEMacro;
         maxwell3d.SetHLEReplacementAttributeType(0, 0x640, Maxwell3D::HLEReplacementAttributeType::BaseVertex);
@@ -456,7 +470,7 @@ void HLE_MultiDrawIndexedIndirectCount::Fallback(Engines::Maxwell3D& maxwell3d, 
         maxwell3d.CallMethod(0x8e3, 0x648, true);
         maxwell3d.CallMethod(0x8e4, static_cast<u32>(index), true);
         maxwell3d.dirty.flags[VideoCommon::Dirty::IndexBuffer] = true;
-        maxwell3d.draw_manager->DrawIndex(topology, parameters[base + 2], parameters[base], base_vertex, base_instance, parameters[base + 1]);
+        maxwell3d.draw_manager->DrawIndex(topology, index_first, index_count, base_vertex, base_instance, instance_count);
     }
 }
 void HLE_DrawIndirectByteCount::Execute(Engines::Maxwell3D& maxwell3d, std::span<const u32> parameters, [[maybe_unused]] u32 method) {
