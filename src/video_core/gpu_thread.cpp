@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/assert.h"
+#include "common/logging.h"
 #include "common/profiling.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
@@ -13,6 +14,7 @@
 #include "video_core/gpu.h"
 #include "video_core/gpu_thread.h"
 #include "video_core/renderer_base.h"
+#include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace VideoCommon::GPUThread {
 
@@ -33,18 +35,28 @@ static void RunThread(std::stop_token stop_token, Core::System& system, VideoCor
             break;
         }
         CITRON_PROFILE_SCOPE("GPUThread::ProcessCommand");
-        if (auto* submit_list = std::get_if<SubmitListCommand>(&next.data)) {
-            scheduler.Push(submit_list->channel, std::move(submit_list->entries));
-        } else if (std::holds_alternative<GPUTickCommand>(next.data)) {
-            system.GPU().TickWork();
-        } else if (const auto* flush = std::get_if<FlushRegionCommand>(&next.data)) {
-            rasterizer->FlushRegion(flush->addr, flush->size);
-        } else if (const auto* invalidate = std::get_if<InvalidateRegionCommand>(&next.data)) {
-            rasterizer->OnCacheInvalidation(invalidate->addr, invalidate->size);
-        } else if (std::holds_alternative<SynchronizeCommand>(next.data)) {
-            // The command's fence is signaled below after all earlier queue entries are processed.
-        } else {
-            ASSERT(false);
+        try {
+            if (auto* submit_list = std::get_if<SubmitListCommand>(&next.data)) {
+                scheduler.Push(submit_list->channel, std::move(submit_list->entries));
+            } else if (std::holds_alternative<GPUTickCommand>(next.data)) {
+                system.GPU().TickWork();
+            } else if (const auto* flush = std::get_if<FlushRegionCommand>(&next.data)) {
+                rasterizer->FlushRegion(flush->addr, flush->size);
+            } else if (const auto* invalidate = std::get_if<InvalidateRegionCommand>(&next.data)) {
+                rasterizer->OnCacheInvalidation(invalidate->addr, invalidate->size);
+            } else if (std::holds_alternative<SynchronizeCommand>(next.data)) {
+                // The command's fence is signaled below after all earlier queue entries are processed.
+            } else {
+                ASSERT(false);
+            }
+        } catch (const Vulkan::vk::Exception& exception) {
+            // An uncaught exception here (e.g. VK_ERROR_DEVICE_LOST surfacing from present)
+            // would escape this thread's entry function and abort the whole process.
+            LOG_CRITICAL(HW_GPU, "GPU thread caught exception: {}, stopping", exception.what());
+            state.signaled_fence.store(next.fence);
+            std::scoped_lock lk{state.write_lock};
+            state.cv.notify_all();
+            return;
         }
         state.signaled_fence.store(next.fence);
         if (next.block) {
