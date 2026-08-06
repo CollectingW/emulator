@@ -341,21 +341,9 @@ void HLE_DrawIndexedIndirect::Fallback(Engines::Maxwell3D& maxwell3d, std::span<
     const u32 instance_count = parameters[2] & 0xFFFF;
     const u32 element_base = parameters[4];
     const u32 base_instance = parameters[5];
-    // DIAG: resolve the host pointer backing parameters[4]/[5]'s source address, for setting a
-    // live gdb watchpoint on the exact byte range to catch whatever writes it.
-    if (parameters.size() > 5 &&
-        (parameters[1] > 200'000 || element_base > 200'000 || base_instance > 200'000)) {
-        static std::atomic<u64> diag_count{0};
-        if (diag_count.fetch_add(1) + 1 <= 100) {
-            const auto addr4 = maxwell3d.GetMacroAddress(4);
-            const auto addr5 = maxwell3d.GetMacroAddress(5);
-            LOG_CRITICAL(HW_GPU,
-                        "DIAG hostptr: p4={} gpuaddr4={:#x} hostptr4={:#x} "
-                        "p5={} gpuaddr5={:#x} hostptr5={:#x}",
-                        element_base, addr4, maxwell3d.DiagResolveHostPointer(addr4),
-                        base_instance, addr5, maxwell3d.DiagResolveHostPointer(addr5));
-        }
-    }
+    // parameters[1] (index count) has been observed wildly exceeding what the actually-bound
+    // index buffer can hold -- clamp to what's really there instead of trusting it blindly.
+    const u32 real_index_count = std::min(parameters[1], u32(maxwell3d.EstimateIndexBufferSize()));
     maxwell3d.regs.vertex_id_base = element_base;
     maxwell3d.regs.global_base_vertex_index = element_base;
     maxwell3d.regs.global_base_instance_index = base_instance;
@@ -365,7 +353,7 @@ void HLE_DrawIndexedIndirect::Fallback(Engines::Maxwell3D& maxwell3d, std::span<
         maxwell3d.SetHLEReplacementAttributeType(0, 0x640, Maxwell3D::HLEReplacementAttributeType::BaseVertex);
         maxwell3d.SetHLEReplacementAttributeType(0, 0x644, Maxwell3D::HLEReplacementAttributeType::BaseInstance);
     }
-    maxwell3d.draw_manager->DrawIndex(Tegra::Maxwell3D::Regs::PrimitiveTopology(parameters[0]), parameters[3], parameters[1], element_base, base_instance, instance_count);
+    maxwell3d.draw_manager->DrawIndex(Tegra::Maxwell3D::Regs::PrimitiveTopology(parameters[0]), parameters[3], real_index_count, element_base, base_instance, instance_count);
     maxwell3d.regs.vertex_id_base = 0x0;
     maxwell3d.regs.global_base_vertex_index = 0x0;
     maxwell3d.regs.global_base_instance_index = 0x0;
