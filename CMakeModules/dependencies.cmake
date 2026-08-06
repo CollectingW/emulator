@@ -609,10 +609,11 @@ if (CITRON_ENABLE_TRACY AND NOT TARGET Tracy::TracyClient)
             )
         endif()
         if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang")
+            # -fno-cs-profile-generate is not a valid clang flag (no negated form for
+            # -fcs-profile-generate); simply never passing it keeps it off by default.
             target_compile_options(TracyClient PRIVATE
                 "-fno-profile-instr-generate"
                 "-fno-profile-instr-use"
-                "-fno-cs-profile-generate"
             )
         endif()
         # NOTE: We deliberately do NOT define a project-wide TRACY_CALLSTACK depth

@@ -3121,6 +3121,19 @@ public:
 
     size_t EstimateIndexBufferSize();
 
+    // DIAG: checks whether a value is a currently-mapped GPU virtual address, for
+    // correlating suspicious macro parameter values against real buffer addresses.
+    bool DiagIsMappedGpuAddress(GPUVAddr addr) const;
+
+    // DIAG: independently re-reads one word straight from guest memory at addr, bypassing
+    // macro_params entirely -- for comparing against what ProcessMacro/FetchParameter already
+    // captured, to localize whether corruption is in guest RAM itself or in citron's read path.
+    u32 DiagReadFreshGpuWord(GPUVAddr addr) const;
+
+    // DIAG: resolves a GPU address down to the real host pointer backing it, for setting a
+    // live gdb watchpoint on the exact byte range to catch whatever CPU-side code writes it.
+    u64 DiagResolveHostPointer(GPUVAddr addr) const;
+
     /// Handles a write to the CLEAR_BUFFERS register.
     void ProcessClearBuffers(u32 layer_count);
 

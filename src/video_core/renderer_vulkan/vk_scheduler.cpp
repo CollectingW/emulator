@@ -9,6 +9,7 @@
 #include "video_core/renderer_vulkan/vk_query_cache.h"
 
 #include "common/thread.h"
+#include "common/logging.h"
 #include "common/profiling.h"
 #include "video_core/renderer_vulkan/vk_command_pool.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
@@ -96,12 +97,50 @@ void Scheduler::RequestRenderpass(const Framebuffer* framebuffer) {
         render_area.height == state.render_area.height) {
         return;
     }
+    // EndRenderPass() is a no-op without a prior active render pass, so a write from outside any
+    // render pass (compute, upload) right before this one would go unsynchronized -- only that
+    // specific gap needs the extra barrier below; back-to-back render passes are already covered
+    // by EndRenderPass()'s own barrier.
+    const bool had_no_active_renderpass = state.renderpass == nullptr;
     EndRenderPass();
     state.renderpass = renderpass;
     state.framebuffer = framebuffer_handle;
     state.render_area = render_area;
 
-    Record([renderpass, framebuffer_handle, render_area](vk::CommandBuffer cmdbuf) {
+    const u32 num_images = framebuffer->NumImages();
+    const std::array images = framebuffer->Images();
+    const std::array ranges = framebuffer->ImageRanges();
+    Record([renderpass, framebuffer_handle, render_area, num_images, images, ranges,
+            had_no_active_renderpass](vk::CommandBuffer cmdbuf) {
+        if (had_no_active_renderpass) {
+            std::array<VkImageMemoryBarrier, 9> barriers;
+            for (size_t i = 0; i < num_images; ++i) {
+                barriers[i] = VkImageMemoryBarrier{
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    .pNext = nullptr,
+                    .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT |
+                                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                     VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                     VK_ACCESS_TRANSFER_WRITE_BIT,
+                    .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                     VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                     VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                    .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+                    .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .image = images[i],
+                    .subresourceRange = ranges[i],
+                };
+            }
+            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                   VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                       VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+                                       VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                   0, nullptr, nullptr, vk::Span(barriers.data(), num_images));
+        }
+
         const VkRenderPassBeginInfo renderpass_bi{
             .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
             .pNext = nullptr,
@@ -117,9 +156,9 @@ void Scheduler::RequestRenderpass(const Framebuffer* framebuffer) {
         };
         cmdbuf.BeginRenderPass(renderpass_bi, VK_SUBPASS_CONTENTS_INLINE);
     });
-    num_renderpass_images = framebuffer->NumImages();
-    renderpass_images = framebuffer->Images();
-    renderpass_image_ranges = framebuffer->ImageRanges();
+    num_renderpass_images = num_images;
+    renderpass_images = images;
+    renderpass_image_ranges = ranges;
 }
 
 void Scheduler::RequestOutsideRenderPassOperationContext() {
@@ -179,9 +218,16 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
             // Perform the work, tracking whether the chunk was a submission
             // before executing.
             const bool has_submit = work->HasSubmit();
-            {
+            try {
                 CITRON_PROFILE_SCOPE("Vulkan::WorkerExecute");
                 work->ExecuteAll(current_cmdbuf, current_upload_cmdbuf);
+            } catch (const vk::Exception& exception) {
+                // An uncaught exception here would escape std::jthread's entry function and
+                // terminate the whole process (e.g. on device loss). Nothing further can be
+                // submitted once the device is gone, so just stop the worker instead of crashing.
+                LOG_CRITICAL(Render_Vulkan, "Vulkan worker thread caught exception: {}, stopping",
+                            exception.what());
+                return;
             }
 
             // If the chunk was a submission, reallocate the command buffer.
@@ -300,6 +346,13 @@ void Scheduler::EndPendingOperations() {
 void Scheduler::EndRenderPass() {
     if (!state.renderpass) {
         return;
+    }
+    // Close any in-flight occlusion query before the render pass it started in goes away.
+    // Otherwise its EndQuery command (queued separately, whenever the query happens to be
+    // paused) can end up recorded after this render pass ends, which is invalid: Vulkan requires
+    // a query to be ended within the same render pass instance it was begun in.
+    if (query_cache) {
+        query_cache->PauseAllCounters();
     }
     Record([num_images = num_renderpass_images, images = renderpass_images,
             ranges = renderpass_image_ranges](vk::CommandBuffer cmdbuf) {

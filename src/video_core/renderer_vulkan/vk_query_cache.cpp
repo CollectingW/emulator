@@ -14,6 +14,7 @@
 
 #include "common/bit_util.h"
 #include "common/common_types.h"
+#include "common/logging.h"
 #include "video_core/engines/draw_manager.h"
 #include "video_core/host1x/gpu_device_memory_manager.h"
 #include "video_core/query_cache/query_cache.h"
@@ -76,7 +77,11 @@ public:
             device.ReportLoss();
             [[fallthrough]];
         default:
-            throw vk::Exception(query_result);
+            // An uncaught throw here would terminate whatever thread calls Sync() (not
+            // necessarily a Vulkan-owned thread). Log and leave host_results as-is instead.
+            LOG_CRITICAL(Render_Vulkan, "GetQueryResults failed with VkResult={}",
+                        static_cast<int>(query_result));
+            return;
         }
     }
 
@@ -165,16 +170,9 @@ public:
         if (!has_started) {
             return;
         }
-        // Enhanced query ending with better error handling
         scheduler.Record([query_pool = current_query_pool,
                           query_index = current_bank_slot](vk::CommandBuffer cmdbuf) {
-            try {
-                cmdbuf.EndQuery(query_pool, static_cast<u32>(query_index));
-            } catch (...) {
-                // If query ending fails, we'll log it but continue
-                // This prevents crashes from malformed query states
-                LOG_WARNING(Render_Vulkan, "Failed to end query, continuing execution");
-            }
+            cmdbuf.EndQuery(query_pool, static_cast<u32>(query_index));
         });
         has_started = false;
     }

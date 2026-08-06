@@ -127,6 +127,8 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkCmdSetDepthBias2EXT);
     X(vkCmdSetDepthBounds);
     X(vkCmdSetEvent);
+    X(vkCmdSetCheckpointNV);
+    X(vkGetQueueCheckpointDataNV);
     X(vkCmdSetScissor);
     X(vkCmdSetStencilCompareMask);
     X(vkCmdSetStencilReference);

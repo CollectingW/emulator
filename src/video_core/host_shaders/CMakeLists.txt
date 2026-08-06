@@ -31,6 +31,8 @@ set(SHADER_FILES
     full_screen_triangle.vert
     fxaa.frag
     fxaa.vert
+    indirect_dispatch_clamp.comp
+    indirect_draw_clamp.comp
     pitch_unswizzle.comp
     present_bicubic.frag
     present_lanczos.frag

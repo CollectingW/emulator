@@ -4,6 +4,7 @@
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
 #include <cstring>
 #include <fstream>
 #include <optional>
@@ -25,6 +26,7 @@
 #endif
 
 #include "common/assert.h"
+#include "common/profiling.h"
 #include "common/scope_exit.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
@@ -268,7 +270,9 @@ void HLE_DrawArraysIndirect::Fallback(Engines::Maxwell3D& maxwell3d, std::span<c
         }
     };
     maxwell3d.RefreshParameters();
-    const u32 instance_count = (maxwell3d.GetRegisterValue(0xD1B) & parameters[2]);
+    // reg[0xD1B] is never written anywhere, so the old `GetRegisterValue(0xD1B) & parameters[2]`
+    // mask was always a no-op (0xFFFFFFFF). Mask explicitly instead.
+    const u32 instance_count = parameters[2] & 0xFFFF;
     auto topology = Maxwell3D::Regs::PrimitiveTopology(parameters[0]);
     const u32 vertex_first = parameters[3];
     const u32 vertex_count = parameters[1];
@@ -296,6 +300,8 @@ void HLE_DrawIndexedIndirect::Execute(Engines::Maxwell3D& maxwell3d, std::span<c
         Fallback(maxwell3d, parameters);
         return;
     }
+    // AnyParametersDirty() true means this data is stale; refresh before reading parameters[4]/[5] below.
+    maxwell3d.RefreshParameters();
 
     const u32 estimate = u32(maxwell3d.EstimateIndexBufferSize());
     const u32 element_base = parameters[4];
@@ -330,9 +336,26 @@ void HLE_DrawIndexedIndirect::Execute(Engines::Maxwell3D& maxwell3d, std::span<c
 }
 void HLE_DrawIndexedIndirect::Fallback(Engines::Maxwell3D& maxwell3d, std::span<const u32> parameters) {
     maxwell3d.RefreshParameters();
-    const u32 instance_count = (maxwell3d.GetRegisterValue(0xD1B) & parameters[2]);
+    // reg[0xD1B] is never written anywhere, so the old `GetRegisterValue(0xD1B) & parameters[2]`
+    // mask was always a no-op (0xFFFFFFFF). Mask explicitly instead.
+    const u32 instance_count = parameters[2] & 0xFFFF;
     const u32 element_base = parameters[4];
     const u32 base_instance = parameters[5];
+    // DIAG: resolve the host pointer backing parameters[4]/[5]'s source address, for setting a
+    // live gdb watchpoint on the exact byte range to catch whatever writes it.
+    if (parameters.size() > 5 &&
+        (parameters[1] > 200'000 || element_base > 200'000 || base_instance > 200'000)) {
+        static std::atomic<u64> diag_count{0};
+        if (diag_count.fetch_add(1) + 1 <= 100) {
+            const auto addr4 = maxwell3d.GetMacroAddress(4);
+            const auto addr5 = maxwell3d.GetMacroAddress(5);
+            LOG_CRITICAL(HW_GPU,
+                        "DIAG hostptr: p4={} gpuaddr4={:#x} hostptr4={:#x} "
+                        "p5={} gpuaddr5={:#x} hostptr5={:#x}",
+                        element_base, addr4, maxwell3d.DiagResolveHostPointer(addr4),
+                        base_instance, addr5, maxwell3d.DiagResolveHostPointer(addr5));
+        }
+    }
     maxwell3d.regs.vertex_id_base = element_base;
     maxwell3d.regs.global_base_vertex_index = element_base;
     maxwell3d.regs.global_base_instance_index = base_instance;
@@ -426,6 +449,9 @@ void HLE_MultiDrawIndexedIndirectCount::Fallback(Engines::Maxwell3D& maxwell3d, 
     const std::size_t last_draw = start_indirect + (std::min)(effective_draws, max_draws);
     for (std::size_t index = first_draw; index < last_draw; index++) {
         const std::size_t base = index * indirect_words + 5;
+        if (base + 4 >= parameters.size()) {
+            break;
+        }
         const u32 base_vertex = parameters[base + 3];
         const u32 base_instance = parameters[base + 4];
         maxwell3d.regs.vertex_id_base = base_vertex;
@@ -601,6 +627,7 @@ void HLE_TransformFeedbackSetup::Execute(Engines::Maxwell3D& maxwell3d, std::spa
 }
 
 void MacroInterpreterImpl::Execute(Engines::Maxwell3D& maxwell3d, std::span<const u32> params, u32 method) {
+    CITRON_PROFILE_SCOPE("MacroInterpreter::Execute");
     Reset();
     current_method = method;
 
@@ -613,10 +640,19 @@ void MacroInterpreterImpl::Execute(Engines::Maxwell3D& maxwell3d, std::span<cons
     parameters.resize(params.size());
     std::memcpy(parameters.data(), params.data(), params.size() * sizeof(u32));
 
-    // Execute the code until we hit an exit condition.
+    // Execute the code until we hit an exit condition, bounded as a backstop against
+    // interpreter bugs that fail to terminate a macro's loop (matches the vertex/instance
+    // clamp philosophy in vk_rasterizer.cpp).
+    static constexpr u64 MaxSteps = 1'000'000;
     bool keep_executing = true;
+    u64 steps = 0;
     while (keep_executing) {
         keep_executing = Step(maxwell3d, false);
+        if (++steps >= MaxSteps) {
+            LOG_CRITICAL(HW_GPU, "Macro 0x{:x} exceeded {} steps without terminating; aborting",
+                        current_method, MaxSteps);
+            break;
+        }
     }
 
     // Assert the the macro used all the input parameters
@@ -964,6 +1000,20 @@ struct MacroJITx64Impl final : public Xbyak::CodeGenerator, public DynamicCached
         , code{code_}
     {
         Compile();
+        // DIAG: dump the generated native code for offline disassembly/inspection.
+        const u64 hash = Common::HashValue(std::vector<u32>(code.begin(), code.end()));
+        if (hash == 0x771BB18C62444DA0ULL || hash == 0x0217920100488FF7ULL) {
+            const auto base_dir{Common::FS::GetCitronPath(Common::FS::CitronPath::DumpDir)};
+            const auto jit_dir{base_dir / "macro_jit"};
+            if (Common::FS::CreateDir(base_dir) && Common::FS::CreateDir(jit_dir)) {
+                const auto name{jit_dir / fmt::format("{:016x}.bin", hash)};
+                std::fstream jit_file(name, std::ios::out | std::ios::binary);
+                if (jit_file) {
+                    jit_file.write(reinterpret_cast<const char*>(getCode()),
+                                   static_cast<std::streamsize>(getSize()));
+                }
+            }
+        }
     }
 
     void Execute(Engines::Maxwell3D& maxwell3d, std::span<const u32> parameters, u32 method) override;
@@ -1013,6 +1063,7 @@ struct MacroJITx64Impl final : public Xbyak::CodeGenerator, public DynamicCached
 };
 
 void MacroJITx64Impl::Execute(Engines::Maxwell3D& maxwell3d, std::span<const u32> parameters, u32 method) {
+    CITRON_PROFILE_SCOPE("MacroJITx64::Execute");
     ASSERT_OR_EXECUTE(program != nullptr, { return; });
     JITState state{};
     state.maxwell3d = &maxwell3d;

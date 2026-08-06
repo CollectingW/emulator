@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/logging.h"
 #include "common/settings.h"
 #include "common/thread.h"
 #include "core/frontend/emu_window.h"
@@ -278,7 +279,16 @@ void PresentManager::PresentThread(std::stop_token token) {
         // lock in WaitPresent is guaranteed to occur after here.
         std::exchange(lock, std::unique_lock{swapchain_mutex});
 
-        CopyToSwapchain(frame);
+        try {
+            CopyToSwapchain(frame);
+        } catch (const vk::Exception& exception) {
+            // An uncaught exception here would escape std::jthread's entry function and
+            // terminate the whole process (e.g. on device loss).
+            LOG_CRITICAL(Render_Vulkan, "Vulkan present thread caught exception: {}, stopping",
+                        exception.what());
+            ReleaseRenderFrame(frame);
+            return;
+        }
 
         ReleaseRenderFrame(frame);
     }

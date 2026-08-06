@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <bitset>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <thread>
@@ -1254,8 +1255,15 @@ void KernelCore::SuspendEmulation(bool suspended) {
         return true;
     };
 
+    // Cap the wait -- a guest thread stuck in a scheduler-invisible loop would spin here forever.
+    static constexpr std::chrono::milliseconds SuspendWaitTimeout{3000};
+    const auto deadline = std::chrono::steady_clock::now() + SuspendWaitTimeout;
     while (!TryWait()) {
-        // ...
+        if (std::chrono::steady_clock::now() >= deadline) {
+            LOG_CRITICAL(Kernel, "SuspendEmulation: timed out waiting for guest threads to stop");
+            break;
+        }
+        std::this_thread::yield();
     }
 }
 

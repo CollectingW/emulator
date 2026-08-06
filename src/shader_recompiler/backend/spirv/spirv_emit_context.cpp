@@ -6,6 +6,7 @@
 #include <array>
 #include <bit>
 #include <climits>
+#include <vector>
 
 #include <boost/container/static_vector.hpp>
 
@@ -298,6 +299,19 @@ void DefineConstBuffers(EmitContext& ctx, const Info& info, Id UniformDefinition
     const Id uniform_type{ctx.TypePointer(spv::StorageClass::Uniform, type)};
     ctx.uniform_types.*member_type = uniform_type;
 
+    // Sirit's type/const declarations are deduplicated by structural equality, so two
+    // descriptors that round to the same actual_size get back the same array_type/struct_type
+    // Id. Decorating unconditionally below would then emit duplicate OpDecorate instructions on
+    // the same Id, which some drivers reject as invalid SPIR-V. Only decorate each Id once.
+    std::vector<u32> decorated_type_ids;
+    const auto already_decorated = [&](Id id) {
+        const bool seen = std::ranges::find(decorated_type_ids, id.value) != decorated_type_ids.end();
+        if (!seen) {
+            decorated_type_ids.push_back(id.value);
+        }
+        return seen;
+    };
+
     for (const ConstantBufferDescriptor& desc : info.constant_buffer_descriptors) {
         u32 actual_size = info.constant_buffer_used_sizes[desc.index];
 
@@ -306,13 +320,17 @@ void DefineConstBuffers(EmitContext& ctx, const Info& info, Id UniformDefinition
         actual_size = std::max((actual_size + 255U) & ~255U, 256U);
 
         const Id array_type{ctx.TypeArray(type, ctx.Const(actual_size / element_size))};
-        ctx.Decorate(array_type, spv::Decoration::ArrayStride, element_size);
+        if (!already_decorated(array_type)) {
+            ctx.Decorate(array_type, spv::Decoration::ArrayStride, element_size);
+        }
 
         const Id struct_type{ctx.TypeStruct(array_type)};
         Name(ctx, struct_type, "{}_cbuf_block_{}{}_{}", ctx.stage, type_char, element_size * CHAR_BIT, desc.index);
-        ctx.Decorate(struct_type, spv::Decoration::Block);
+        if (!already_decorated(struct_type)) {
+            ctx.Decorate(struct_type, spv::Decoration::Block);
+            ctx.MemberDecorate(struct_type, 0, spv::Decoration::Offset, 0U);
+        }
         ctx.MemberName(struct_type, 0, "data");
-        ctx.MemberDecorate(struct_type, 0, spv::Decoration::Offset, 0U);
 
         const Id struct_pointer_type{ctx.TypePointer(spv::StorageClass::Uniform, struct_type)};
 

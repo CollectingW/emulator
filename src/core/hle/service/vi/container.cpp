@@ -10,6 +10,7 @@
 #include "core/hle/service/sm/sm.h"
 #include "core/hle/service/vi/container.h"
 #include "core/hle/service/vi/vi_results.h"
+#include "video_core/gpu.h"
 
 namespace Service::VI {
 
@@ -226,6 +227,14 @@ Result Container::CreateLayerLocked(u64* out_layer_id, u64 display_id, u64 owner
 Result Container::DestroyLayerLocked(u64 layer_id) {
     auto* const layer = m_layers.GetLayerById(layer_id);
     R_UNLESS(layer != nullptr, VI::ResultNotFound);
+
+    // DestroyLayer/DestroyBufferQueue unconditionally free every buffer slot's GPU-visible
+    // memory (ConsumerBase::Abandon -> FreeBufferLocked), with no wait on the release fence
+    // that's supposed to guarantee the GPU is actually done with it. If the GPU is still
+    // reading from one of those buffers (e.g. presenting the last frame of a layer being torn
+    // down mid-transition), freeing its memory out from under it is a use-after-free from the
+    // GPU's perspective -- this has been observed causing a real VK_ERROR_DEVICE_LOST.
+    m_system.GPU().WaitForGPUCompletion();
 
     m_surface_flinger->DestroyLayer(layer->GetConsumerBinderId());
     m_surface_flinger->DestroyBufferQueue(layer->GetConsumerBinderId(),

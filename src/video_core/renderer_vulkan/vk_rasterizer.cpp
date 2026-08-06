@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <exception>
 #include <memory>
 #include <mutex>
@@ -13,10 +14,12 @@
 #include "citron/util/title_ids.h"
 #include "common/assert.h"
 #include "common/logging.h"
+#include "common/profiling.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "video_core/arm64_register_guard.h"
 #include "video_core/buffer_cache/buffer_cache.h"
+#include "video_core/gpu_op_trace.h"
 #include "video_core/control/channel_state.h"
 #include "video_core/engines/draw_manager.h"
 #include "video_core/engines/kepler_compute.h"
@@ -56,6 +59,13 @@ struct DrawParams {
     u32 first_index;
     bool is_indexed;
 };
+
+// Drops a GPU-side checkpoint so ReportLoss() can ask the GPU what it actually reached.
+void RecordCheckpoint(const Device& device, vk::CommandBuffer cmdbuf, u64 index) {
+    if (device.IsExtDeviceDiagnosticCheckpointsSupported()) {
+        cmdbuf.SetCheckpointNV(reinterpret_cast<const void*>(static_cast<uintptr_t>(index)));
+    }
+}
 
 #if CITRON_ARM64_REGISTER_GUARD_SUPPORTED
 struct ConfigureCorruptionTag;
@@ -205,6 +215,29 @@ DrawParams MakeDrawParams(const MaxwellDrawState& draw_state, u32 num_instances,
         params.base_vertex = 0;
         params.is_indexed = true;
     }
+    // Multiple independent leaks into DrawManager's shared instance-batch state have produced
+    // multi-million vertex/instance draws that hang the GPU outright; clamp as a backstop.
+    static constexpr u32 MaxVertexOrIndexCount = 200'000;
+    static constexpr u32 MaxInstanceCount = 2'000;
+    if (params.num_vertices > MaxVertexOrIndexCount || params.num_instances > MaxInstanceCount) {
+        static std::atomic<u64> clamp_count{0};
+        const u64 count = clamp_count.fetch_add(1) + 1;
+        if (count <= 2000) {
+            LOG_CRITICAL(Render_Vulkan,
+                        "Clamping runaway draw #{}: vertices={} instances={} is_indexed={} "
+                        "draw_mode={} topology={} base_index={} base_instance={} "
+                        "index_buffer.count={} index_buffer.first={} vertex_buffer.count={} "
+                        "vertex_buffer.first={}",
+                        count, params.num_vertices, params.num_instances, is_indexed,
+                        static_cast<u32>(draw_state.draw_mode),
+                        static_cast<u32>(draw_state.topology), draw_state.base_index,
+                        draw_state.base_instance, draw_state.index_buffer.count,
+                        draw_state.index_buffer.first, draw_state.vertex_buffer.count,
+                        draw_state.vertex_buffer.first);
+        }
+        params.num_vertices = std::min(params.num_vertices, MaxVertexOrIndexCount);
+        params.num_instances = std::min(params.num_instances, MaxInstanceCount);
+    }
     return params;
 }
 } // Anonymous namespace
@@ -232,6 +265,10 @@ RasterizerVulkan::RasterizerVulkan(Core::Frontend::EmuWindow& emu_window_, Tegra
                      render_pass_cache, buffer_cache, texture_cache, gpu.ShaderNotify()),
       accelerate_dma(buffer_cache, texture_cache, scheduler),
       fence_manager(*this, gpu, texture_cache, buffer_cache, query_cache, device, scheduler),
+      indirect_dispatch_clamp_pass(device, scheduler, descriptor_pool,
+                                   compute_pass_descriptor_queue),
+      indirect_draw_clamp_pass(device, scheduler, descriptor_pool, staging_pool,
+                               compute_pass_descriptor_queue),
       wfi_event(device.GetLogical().CreateEvent()) {
     scheduler.SetQueryCache(query_cache);
 }
@@ -242,13 +279,22 @@ void RasterizerVulkan::Shutdown() {
     }
     std::unique_lock exclusive_guard{shutdown_mutex};
 
-    // 1. Tell the GPU to finish current work
-    scheduler.Finish();
+    // Shutdown() runs synchronously on the caller's thread (e.g. from ~GPU::Impl during
+    // emulation stop), not on a Vulkan-owned thread -- an uncaught exception here escapes an
+    // implicitly noexcept destructor and calls std::terminate. On a lost device none of this
+    // work can succeed or matters anymore, so just stop instead of crashing.
+    try {
+        // 1. Tell the GPU to finish current work
+        scheduler.Finish();
 
-    // 2. Force runtimes to release internal references/handles FIRST
-    // This ensures VkBuffer/VkImage handles are gone before the memory they sit on is freed
-    buffer_cache_runtime.Finish();
-    texture_cache_runtime.Finish();
+        // 2. Force runtimes to release internal references/handles FIRST
+        // This ensures VkBuffer/VkImage handles are gone before the memory they sit on is freed
+        buffer_cache_runtime.Finish();
+        texture_cache_runtime.Finish();
+    } catch (const vk::Exception& exception) {
+        LOG_CRITICAL(Render_Vulkan, "Rasterizer shutdown caught exception: {}, aborting cleanup",
+                    exception.what());
+    }
 }
 
 RasterizerVulkan::~RasterizerVulkan() {
@@ -265,6 +311,7 @@ RasterizerVulkan::~RasterizerVulkan() {
 
 template <typename Func>
 void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
+    CITRON_PROFILE_SCOPE("RasterizerVulkan::PrepareDraw");
     std::shared_lock shared_guard{shutdown_mutex};
     if (is_shutting_down) {
         return;
@@ -285,6 +332,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
     std::exception_ptr configure_exception;
     {
         std::scoped_lock lock{buffer_cache.mutex, texture_cache.mutex};
+        CITRON_PROFILE_SCOPE("RasterizerVulkan::PrepareDraw::Configure");
         // update engine as channel may be different.
         pipeline->SetEngine(maxwell3d, gpu_memory);
 #if CITRON_ARM64_REGISTER_GUARD_SUPPORTED
@@ -324,11 +372,19 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {
 }
 
 void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
+    CITRON_PROFILE_SCOPE("RasterizerVulkan::Draw");
     PrepareDraw(is_indexed, [this, is_indexed, instance_count] {
         const auto& draw_state = maxwell3d->draw_manager->GetDrawState();
         const u32 num_instances{instance_count};
         const DrawParams draw_params{MakeDrawParams(draw_state, num_instances, is_indexed)};
-        scheduler.Record([draw_params](vk::CommandBuffer cmdbuf) {
+        const u64 op_index = VideoCore::RecordGpuOpGraphics(
+            is_indexed ? VideoCore::GpuOpKind::DrawIndexed : VideoCore::GpuOpKind::Draw,
+            draw_params.num_vertices, draw_params.num_instances,
+            pipeline_cache.graphics_key.unique_hashes);
+        const auto render_area = texture_cache.GetFramebuffer()->RenderArea();
+        VideoCore::SetGpuOpRenderArea(op_index, render_area.width, render_area.height);
+        scheduler.Record([this, draw_params, op_index](vk::CommandBuffer cmdbuf) {
+            RecordCheckpoint(device, cmdbuf, op_index);
             if (draw_params.is_indexed) {
                 cmdbuf.DrawIndexed(draw_params.num_vertices, draw_params.num_instances,
                                    draw_params.first_index, draw_params.base_vertex,
@@ -342,15 +398,23 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
 }
 
 void RasterizerVulkan::DrawIndirect() {
+    CITRON_PROFILE_SCOPE("RasterizerVulkan::DrawIndirect");
     const auto& params = maxwell3d->draw_manager->GetIndirectParams();
     buffer_cache.SetDrawIndirect(&params);
     PrepareDraw(params.is_indexed, [this, &params] {
+        // graphics_key.unique_hashes is only valid after PrepareDraw's Configure() call above.
+        const u64 op_index = VideoCore::RecordGpuOpGraphics(
+            VideoCore::GpuOpKind::DrawIndirect, static_cast<u32>(params.max_draw_counts),
+            static_cast<u32>(params.stride), pipeline_cache.graphics_key.unique_hashes);
+        const auto render_area = texture_cache.GetFramebuffer()->RenderArea();
+        VideoCore::SetGpuOpRenderArea(op_index, render_area.width, render_area.height);
         const auto indirect_buffer = buffer_cache.GetDrawIndirectBuffer();
         const auto& buffer = indirect_buffer.first;
         const auto& offset = indirect_buffer.second;
         if (params.is_byte_count) {
-            scheduler.Record([buffer_obj = buffer->Handle(), offset,
-                              stride = params.stride](vk::CommandBuffer cmdbuf) {
+            scheduler.Record([this, buffer_obj = buffer->Handle(), offset,
+                              stride = params.stride, op_index](vk::CommandBuffer cmdbuf) {
+                RecordCheckpoint(device, cmdbuf, op_index);
                 cmdbuf.DrawIndirectByteCountEXT(1, 0, buffer_obj, offset, 0,
                                                 static_cast<u32>(stride));
             });
@@ -360,28 +424,42 @@ void RasterizerVulkan::DrawIndirect() {
             const auto count = buffer_cache.GetDrawIndirectCount();
             const auto& draw_buffer = count.first;
             const auto& offset_base = count.second;
-            scheduler.Record([draw_buffer_obj = draw_buffer->Handle(),
-                              buffer_obj = buffer->Handle(), offset_base, offset,
-                              params](vk::CommandBuffer cmdbuf) {
+            const auto [clamped_buffer, clamped_offset] = indirect_draw_clamp_pass.Clamp(
+                buffer->Handle(), offset, static_cast<u32>(params.max_draw_counts),
+                static_cast<u32>(params.stride), params.is_indexed);
+            // Clamp's compute dispatch closes the render pass PrepareDraw opened; reopen it.
+            scheduler.RequestRenderpass(texture_cache.GetFramebuffer());
+            scheduler.Record([this, draw_buffer_obj = draw_buffer->Handle(), clamped_buffer,
+                              clamped_offset, offset_base, params,
+                              op_index](vk::CommandBuffer cmdbuf) {
+                RecordCheckpoint(device, cmdbuf, op_index);
                 if (params.is_indexed) {
                     cmdbuf.DrawIndexedIndirectCount(
-                        buffer_obj, offset, draw_buffer_obj, offset_base,
+                        clamped_buffer, clamped_offset, draw_buffer_obj, offset_base,
                         static_cast<u32>(params.max_draw_counts), static_cast<u32>(params.stride));
                 } else {
-                    cmdbuf.DrawIndirectCount(buffer_obj, offset, draw_buffer_obj, offset_base,
-                                             static_cast<u32>(params.max_draw_counts),
+                    cmdbuf.DrawIndirectCount(clamped_buffer, clamped_offset, draw_buffer_obj,
+                                             offset_base, static_cast<u32>(params.max_draw_counts),
                                              static_cast<u32>(params.stride));
                 }
             });
             return;
         }
-        scheduler.Record([buffer_obj = buffer->Handle(), offset, params](vk::CommandBuffer cmdbuf) {
+        const auto [clamped_buffer, clamped_offset] = indirect_draw_clamp_pass.Clamp(
+            buffer->Handle(), offset, static_cast<u32>(params.max_draw_counts),
+            static_cast<u32>(params.stride), params.is_indexed);
+        // Clamp's compute dispatch closes the render pass PrepareDraw opened; reopen it.
+        scheduler.RequestRenderpass(texture_cache.GetFramebuffer());
+        scheduler.Record([this, clamped_buffer, clamped_offset, params,
+                          op_index](vk::CommandBuffer cmdbuf) {
+            RecordCheckpoint(device, cmdbuf, op_index);
             if (params.is_indexed) {
-                cmdbuf.DrawIndexedIndirect(buffer_obj, offset,
+                cmdbuf.DrawIndexedIndirect(clamped_buffer, clamped_offset,
                                            static_cast<u32>(params.max_draw_counts),
                                            static_cast<u32>(params.stride));
             } else {
-                cmdbuf.DrawIndirect(buffer_obj, offset, static_cast<u32>(params.max_draw_counts),
+                cmdbuf.DrawIndirect(clamped_buffer, clamped_offset,
+                                    static_cast<u32>(params.max_draw_counts),
                                     static_cast<u32>(params.stride));
             }
         });
@@ -390,9 +468,11 @@ void RasterizerVulkan::DrawIndirect() {
 }
 
 void RasterizerVulkan::DrawTexture() {
+    CITRON_PROFILE_SCOPE("RasterizerVulkan::DrawTexture");
     SCOPE_EXIT {
         gpu.TickWork();
     };
+    VideoCore::RecordGpuOp(VideoCore::GpuOpKind::DrawTexture);
     FlushWork();
 
     query_cache.NotifySegment(true);
@@ -438,12 +518,10 @@ void RasterizerVulkan::DrawTexture() {
 }
 
 void RasterizerVulkan::Clear(u32 layer_count) {
+    CITRON_PROFILE_SCOPE("RasterizerVulkan::Clear");
+    const u64 clear_op_index = VideoCore::RecordGpuOp(VideoCore::GpuOpKind::Clear, layer_count);
     FlushWork();
     gpu_memory->FlushCaching();
-
-    query_cache.NotifySegment(true);
-    query_cache.CounterEnable(VideoCommon::QueryType::ZPassPixelCount64,
-                              maxwell3d->regs.zpass_pixel_count_enable);
 
     auto& regs = maxwell3d->regs;
     const bool use_color = regs.clear_surface.R || regs.clear_surface.G || regs.clear_surface.B ||
@@ -459,6 +537,13 @@ void RasterizerVulkan::Clear(u32 layer_count) {
     const Framebuffer* const framebuffer = texture_cache.GetFramebuffer();
     const VkExtent2D render_area = framebuffer->RenderArea();
     scheduler.RequestRenderpass(framebuffer);
+
+    // Must come after RequestRenderpass: occlusion queries can only be started while a render
+    // pass is active. Enabling the counter any earlier records BeginQuery before BeginRenderPass
+    // in the command buffer, which is invalid (query "started outside a renderpass").
+    query_cache.NotifySegment(true);
+    query_cache.CounterEnable(VideoCommon::QueryType::ZPassPixelCount64,
+                              maxwell3d->regs.zpass_pixel_count_enable);
 
     u32 up_scale = 1;
     u32 down_shift = 0;
@@ -514,7 +599,9 @@ void RasterizerVulkan::Clear(u32 layer_count) {
 
         if (regs.clear_surface.R && regs.clear_surface.G && regs.clear_surface.B &&
             regs.clear_surface.A) {
-            scheduler.Record([color_attachment, clear_value, clear_rect](vk::CommandBuffer cmdbuf) {
+            scheduler.Record([this, color_attachment, clear_value, clear_rect,
+                              clear_op_index](vk::CommandBuffer cmdbuf) {
+                RecordCheckpoint(device, cmdbuf, clear_op_index);
                 const VkClearAttachment attachment{
                     .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                     .colorAttachment = color_attachment,
@@ -560,8 +647,9 @@ void RasterizerVulkan::Clear(u32 layer_count) {
                                      static_cast<u8>(regs.stencil_front_mask), regs.clear_stencil,
                                      regs.stencil_front_func_mask, dst_region);
     } else {
-        scheduler.Record([clear_depth = regs.clear_depth, clear_stencil = regs.clear_stencil,
-                          clear_rect, aspect_flags](vk::CommandBuffer cmdbuf) {
+        scheduler.Record([this, clear_depth = regs.clear_depth, clear_stencil = regs.clear_stencil,
+                          clear_rect, aspect_flags, clear_op_index](vk::CommandBuffer cmdbuf) {
+            RecordCheckpoint(device, cmdbuf, clear_op_index);
             VkClearAttachment attachment;
             attachment.aspectMask = aspect_flags;
             attachment.colorAttachment = 0;
@@ -573,6 +661,7 @@ void RasterizerVulkan::Clear(u32 layer_count) {
 }
 
 void RasterizerVulkan::DispatchCompute() {
+    CITRON_PROFILE_SCOPE("RasterizerVulkan::DispatchCompute");
     std::shared_lock shared_guard{shutdown_mutex};
     if (is_shutting_down)
         return;
@@ -604,16 +693,27 @@ void RasterizerVulkan::DispatchCompute() {
         const auto post_op = VideoCommon::ObtainBufferOperation::DiscardWrite;
         const auto [buffer, offset] =
             buffer_cache.ObtainBuffer(*indirect_address, 12, sync_info, post_op);
+        const u64 op_index = VideoCore::RecordGpuOp(VideoCore::GpuOpKind::DispatchComputeIndirect);
+        // Clamp to the device's real dispatch limit before the driver reads these guest-supplied
+        // dims, which Vulkan validation can't see.
+        indirect_dispatch_clamp_pass.Clamp(buffer->Handle(), offset,
+                                           device.GetMaxComputeWorkGroupCount());
         scheduler.RequestOutsideRenderPassOperationContext();
-        scheduler.Record([indirect_buffer = buffer->Handle(),
-                          indirect_offset = offset](vk::CommandBuffer cmdbuf) {
+        scheduler.Record([this, indirect_buffer = buffer->Handle(), indirect_offset = offset,
+                          op_index](vk::CommandBuffer cmdbuf) {
+            RecordCheckpoint(device, cmdbuf, op_index);
             cmdbuf.DispatchIndirect(indirect_buffer, indirect_offset);
         });
         return;
     }
     const std::array<u32, 3> dim{qmd.grid_dim_x, qmd.grid_dim_y, qmd.grid_dim_z};
+    const u64 op_index =
+        VideoCore::RecordGpuOp(VideoCore::GpuOpKind::DispatchCompute, dim[0], dim[1], dim[2]);
     scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([dim](vk::CommandBuffer cmdbuf) { cmdbuf.Dispatch(dim[0], dim[1], dim[2]); });
+    scheduler.Record([this, dim, op_index](vk::CommandBuffer cmdbuf) {
+        RecordCheckpoint(device, cmdbuf, op_index);
+        cmdbuf.Dispatch(dim[0], dim[1], dim[2]);
+    });
 }
 
 void RasterizerVulkan::ResetCounter(VideoCommon::QueryType type) {
@@ -699,6 +799,16 @@ VideoCore::RasterizerDownloadArea RasterizerVulkan::GetFlushArea(DAddr addr, u64
         if (area) {
             return *area;
         }
+    }
+    // query_cache owns semaphore/fence payload writes (Puller::ProcessSemaphoreTriggerMethod's
+    // WriteLong path); those never go through texture_cache, so a query pending here must not
+    // take the preemptive (no-op) shortcut below or the CPU never waits for the real value.
+    if (query_cache.IsRegionGpuModified(addr, size)) {
+        return VideoCore::RasterizerDownloadArea{
+            .start_address = Common::AlignDown(addr, Core::DEVICE_PAGESIZE),
+            .end_address = Common::AlignUp(addr + size, Core::DEVICE_PAGESIZE),
+            .preemtive = false,
+        };
     }
     VideoCore::RasterizerDownloadArea new_area{
         .start_address = Common::AlignDown(addr, Core::DEVICE_PAGESIZE),
@@ -862,6 +972,10 @@ void RasterizerVulkan::WaitForIdle() {
         cmdbuf.WaitEvents(event, flags, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, {}, {}, {});
     });
     fence_manager.SignalOrdering();
+}
+
+void RasterizerVulkan::WaitForGPUCompletion() {
+    scheduler.Finish();
 }
 
 void RasterizerVulkan::FragmentBarrier() {

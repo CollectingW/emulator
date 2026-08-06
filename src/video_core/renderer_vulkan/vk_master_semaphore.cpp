@@ -4,6 +4,7 @@
 #include <thread>
 
 #include <ranges>
+#include "common/logging.h"
 #include "common/settings.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
 #include "video_core/vulkan_common/vulkan_device.h"
@@ -45,10 +46,16 @@ MasterSemaphore::MasterSemaphore(const Device& device_) : device(device_) {
     // a separate thread waiting for each timeline semaphore value.
     debug_thread = std::jthread([this](std::stop_token stop_token) {
         u64 counter = 0;
-        while (!stop_token.stop_requested()) {
-            if (semaphore.Wait(counter, 10'000'000)) {
-                ++counter;
+        try {
+            while (!stop_token.stop_requested()) {
+                if (semaphore.Wait(counter, 10'000'000)) {
+                    ++counter;
+                }
             }
+        } catch (const vk::Exception& exception) {
+            device.ReportLoss();
+            LOG_CRITICAL(Render_Vulkan, "MasterSemaphore debug thread caught exception: {}",
+                        exception.what());
         }
     });
 }
@@ -63,14 +70,26 @@ void MasterSemaphore::Refresh() {
 
     u64 this_tick{};
     u64 counter{};
-    do {
-        this_tick = gpu_tick.load(std::memory_order_acquire);
-        counter = semaphore.GetCounter();
-        if (counter < this_tick) {
-            return;
-        }
-    } while (!gpu_tick.compare_exchange_weak(this_tick, counter, std::memory_order_release,
-                                             std::memory_order_relaxed));
+    try {
+        do {
+            this_tick = gpu_tick.load(std::memory_order_acquire);
+            counter = semaphore.GetCounter();
+            if (counter < this_tick) {
+                return;
+            }
+        } while (!gpu_tick.compare_exchange_weak(this_tick, counter, std::memory_order_release,
+                                                 std::memory_order_relaxed));
+    } catch (const vk::Exception& exception) {
+        // A lost device can never advance its tick again. Every caller of Wait()/Refresh() is
+        // ultimately asking "has the GPU reached tick N yet" -- on a lost device the honest
+        // answer is "it never will", so give up quietly instead of throwing. This function is
+        // reached from many different threads and even destructors (during emulation shutdown),
+        // so letting the exception propagate is a recurring source of process-terminating
+        // crashes rather than a one-off to catch at a single call site.
+        device.ReportLoss();
+        LOG_CRITICAL(Render_Vulkan, "MasterSemaphore::Refresh caught exception: {}",
+                    exception.what());
+    }
 }
 
 void MasterSemaphore::Wait(u64 tick) {
@@ -93,8 +112,29 @@ void MasterSemaphore::Wait(u64 tick) {
         return;
     }
 
-    // If none of the above is hit, fallback to a regular wait
-    while (!semaphore.Wait(tick)) {
+    // If none of the above is hit, fallback to a regular wait. Bounded per-attempt: an
+    // exception only helps if the driver actually returns an error, but a wedged/hung driver
+    // can simply never return from vkWaitSemaphores at all. Give up after a total deadline
+    // instead of blocking this thread (and everything waiting on it) forever.
+    static constexpr u64 AttemptTimeoutNs = 3'000'000'000ULL; // 3 seconds per attempt
+    static constexpr u64 TotalTimeoutNs = 10'000'000'000ULL;  // 10 seconds overall
+    u64 elapsed_ns = 0;
+    try {
+        while (!semaphore.Wait(tick, AttemptTimeoutNs)) {
+            elapsed_ns += AttemptTimeoutNs;
+            if (elapsed_ns >= TotalTimeoutNs) {
+                device.ReportLoss();
+                LOG_CRITICAL(Render_Vulkan,
+                            "MasterSemaphore::Wait gave up after {}s waiting for tick {}, "
+                            "GPU appears hung (not just lost)",
+                            TotalTimeoutNs / 1'000'000'000ULL, tick);
+                return;
+            }
+        }
+    } catch (const vk::Exception& exception) {
+        device.ReportLoss();
+        LOG_CRITICAL(Render_Vulkan, "MasterSemaphore::Wait caught exception: {}", exception.what());
+        return;
     }
 
     Refresh();

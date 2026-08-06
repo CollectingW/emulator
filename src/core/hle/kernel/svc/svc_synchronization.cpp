@@ -3,6 +3,7 @@
 
 #include <unordered_set>
 
+#include "common/profiling.h"
 #include "common/scope_exit.h"
 #include "common/scratch_buffer.h"
 #include "core/core.h"
@@ -122,7 +123,11 @@ Result WaitSynchronization(Core::System& system, int32_t* out_index, u64 user_ha
     }
 
     // Wait on the objects.
-    Result res = KSynchronizationObject::Wait(kernel, out_index, objs.data(), num_handles, timeout);
+    Result res;
+    {
+        CITRON_PROFILE_SCOPE("Svc::WaitSynchronization::Wait");
+        res = KSynchronizationObject::Wait(kernel, out_index, objs.data(), num_handles, timeout);
+    }
     LOG_INFO(Kernel_SVC, "resolved out_index={}, result=0x{:X}", *out_index, res.raw);
 
     R_SUCCEED_IF(res == ResultSessionClosed);

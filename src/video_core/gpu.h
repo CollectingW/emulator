@@ -142,6 +142,9 @@ public:
 
     /// Flush all current written commands into the host GPU for execution.
     void FlushCommands();
+    /// Blocks until all previously submitted GPU work has actually finished executing. Needed
+    /// before releasing GPU-visible memory the GPU may still be reading from.
+    void WaitForGPUCompletion();
     /// Synchronizes CPU writes with Host GPU memory.
     void InvalidateGPUCache();
     /// Signal the ending of command list.

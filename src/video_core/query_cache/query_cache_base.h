@@ -94,6 +94,10 @@ public:
 
     void CounterClose(QueryType counter_type);
 
+    /// Pauses every active counter streamer. Used before ending a render pass so an in-flight
+    /// query doesn't get its EndQuery command stranded outside the render pass it started in.
+    void PauseAllCounters();
+
     void CounterReport(GPUVAddr addr, QueryType counter_type, QueryPropertiesFlags flags,
                        u32 payload, u32 subreport);
 

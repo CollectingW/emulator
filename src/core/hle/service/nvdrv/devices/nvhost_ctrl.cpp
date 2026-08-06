@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <bit>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 
@@ -124,6 +125,9 @@ NvResult nvhost_ctrl::IocCtrlEventWait(IocCtrlEventWaitParams& params, bool is_a
         syncpoint_manager.IsFenceSignalled(params.fence)) {
         params.value.raw = new_value;
         return NvResult::Success;
+    } else {
+        LOG_DEBUG(Service_NVDRV, "not signalled: syncpt_id={}, current_min={}, target={}",
+                  fence_id, new_value, params.fence.value);
     }
 
     auto& host1x_syncpoint_manager = system.Host1x().GetSyncpointManager();
@@ -146,8 +150,15 @@ NvResult nvhost_ctrl::IocCtrlEventWait(IocCtrlEventWaitParams& params, bool is_a
         if (events[slot].fails > 2) {
             {
                 auto lk = system.StallApplication();
-                host1x_syncpoint_manager.WaitHost(fence_id, target_value);
-                system.UnstallApplication();
+                SCOPE_EXIT {
+                    system.UnstallApplication();
+                };
+                // Bounded: an unbounded wait here can permanently freeze the whole guest.
+                if (!host1x_syncpoint_manager.WaitHost(fence_id, target_value,
+                                                        std::chrono::milliseconds{3000})) {
+                    LOG_ERROR(Service_NVDRV, "Timed out waiting on host syncpoint_id={}, target_value={}",
+                              fence_id, target_value);
+                }
             }
             params.value.raw = target_value;
             return true;

@@ -40,7 +40,11 @@ layout(binding = BINDING_INPUT_BUFFER, std430) readonly restrict buffer InputBuf
     uvec4 astc_data[];
 };
 
-layout(binding = BINDING_OUTPUT_IMAGE, rgba8) uniform writeonly restrict image2DArray dest_image;
+// No format qualifier: the actual destination image's Vulkan format varies by Maxwell texture
+// format (e.g. A8B8G8R8_UNORM_PACK32 for some ASTC variants) and doesn't always match rgba8,
+// which the validation layer flags as a real mismatch (writes would produce undefined values).
+// shaderStorageImageWriteWithoutFormat is a citron-mandatory feature, so this is always legal.
+layout(binding = BINDING_OUTPUT_IMAGE) uniform writeonly restrict image2DArray dest_image;
 
 const uint GOB_SIZE_X_SHIFT = 6;
 const uint GOB_SIZE_Y_SHIFT = 3;

@@ -8,6 +8,7 @@
 #include <boost/container/small_vector.hpp>
 
 #include "common/alignment.h"
+#include "common/profiling.h"
 #include "common/settings.h"
 #include "video_core/control/channel_state.h"
 #include "video_core/dirty_flags.h"
@@ -442,6 +443,7 @@ bool TextureCache<P>::RescaleRenderTargets() {
 
 template <class P>
 void TextureCache<P>::UpdateRenderTargets(bool is_clear) {
+    CITRON_PROFILE_SCOPE("TextureCache::UpdateRenderTargets");
     using namespace VideoCommon::Dirty;
     auto& flags = maxwell3d->dirty.flags;
     if (!flags[Dirty::RenderTargets]) {
@@ -497,6 +499,7 @@ template <bool has_blacklists>
 void TextureCache<P>::FillImageViews(DescriptorTable<TICEntry>& table,
                                      std::span<ImageViewId> cached_image_view_ids,
                                      std::span<ImageViewInOut> views) {
+    CITRON_PROFILE_SCOPE("TextureCache::FillImageViews");
     bool has_blacklisted = false;
     do {
         has_deleted_images = false;

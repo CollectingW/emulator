@@ -14,6 +14,7 @@
 #include <queue>
 
 #include "common/common_types.h"
+#include "common/logging.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/thread.h"
@@ -209,16 +210,25 @@ private:
                 fences.pop();
                 pending_operations.pop_front();
             }
-            if (!current_fence->IsStubbed()) {
-                WaitFence(current_fence);
-            }
-            PopAsyncFlushes();
-            for (auto& operation : current_operations) {
-                operation();
-            }
-            {
-                std::unique_lock lock(ring_guard);
-                delayed_destruction_ring.Push(std::move(current_fence));
+            // An uncaught exception here would escape std::jthread's entry function and
+            // terminate the whole process (e.g. on device loss). Backend-agnostic catch since
+            // this template is shared across renderer backends.
+            try {
+                if (!current_fence->IsStubbed()) {
+                    WaitFence(current_fence);
+                }
+                PopAsyncFlushes();
+                for (auto& operation : current_operations) {
+                    operation();
+                }
+                {
+                    std::unique_lock lock(ring_guard);
+                    delayed_destruction_ring.Push(std::move(current_fence));
+                }
+            } catch (const std::exception& exception) {
+                LOG_CRITICAL(Render, "GPU fencing thread caught exception: {}, stopping",
+                            exception.what());
+                return;
             }
         }
     }

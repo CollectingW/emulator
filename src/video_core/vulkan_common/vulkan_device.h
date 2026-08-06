@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <atomic>
 #include <set>
 #include <span>
@@ -85,6 +86,7 @@ VK_DEFINE_HANDLE(VmaAllocator)
     EXTENSION(KHR, SWAPCHAIN, swapchain)                                                           \
     EXTENSION(KHR, SWAPCHAIN_MUTABLE_FORMAT, swapchain_mutable_format)                             \
     EXTENSION(KHR, IMAGE_FORMAT_LIST, image_format_list)                                           \
+    EXTENSION(NV, DEVICE_DIAGNOSTIC_CHECKPOINTS, device_diagnostic_checkpoints)                    \
     EXTENSION(NV, DEVICE_DIAGNOSTICS_CONFIG, device_diagnostics_config)                            \
     EXTENSION(NV, GEOMETRY_SHADER_PASSTHROUGH, geometry_shader_passthrough)                        \
     EXTENSION(NV, LOW_LATENCY_2, low_latency2)                                                     \
@@ -307,6 +309,12 @@ public:
     /// Returns the maximum size for shared memory.
     u32 GetMaxComputeSharedMemorySize() const {
         return properties.properties.limits.maxComputeSharedMemorySize;
+    }
+
+    /// Smallest per-dimension compute dispatch limit this device supports.
+    u32 GetMaxComputeWorkGroupCount() const {
+        const auto& count = properties.properties.limits.maxComputeWorkGroupCount;
+        return std::min({count[0], count[1], count[2]});
     }
 
     /// Returns float control properties of the device.
@@ -618,6 +626,11 @@ public:
 
     bool IsExtConditionalRendering() const {
         return extensions.conditional_rendering;
+    }
+
+    /// Returns true if the device supports VK_NV_device_diagnostic_checkpoints.
+    bool IsExtDeviceDiagnosticCheckpointsSupported() const {
+        return extensions.device_diagnostic_checkpoints;
     }
 
     bool HasTimelineSemaphore() const;

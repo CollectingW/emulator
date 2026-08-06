@@ -9,6 +9,7 @@
 #include <memory>
 #include <numeric>
 
+#include "common/profiling.h"
 #include "common/range_sets.inc"
 #include "video_core/buffer_cache/buffer_cache_base.h"
 #include "video_core/guest_memory.h"
@@ -766,6 +767,7 @@ void BufferCache<P>::BindHostDrawIndirectBuffers() {
 
 template <class P>
 void BufferCache<P>::BindHostGraphicsUniformBuffers(size_t stage) {
+    CITRON_PROFILE_SCOPE("BufferCache::BindHostGraphicsUniformBuffers");
     u32 dirty = ~0U;
     if constexpr (HAS_PERSISTENT_UNIFORM_BUFFER_BINDINGS) {
         dirty = std::exchange(channel_state->dirty_uniform_buffers[stage], 0);
@@ -1038,6 +1040,7 @@ void BufferCache<P>::BindHostComputeTextureBuffers() {
 
 template <class P>
 void BufferCache<P>::DoUpdateGraphicsBuffers(bool is_indexed) {
+    CITRON_PROFILE_SCOPE("BufferCache::DoUpdateGraphicsBuffers");
     BufferOperations([&]() {
         if (is_indexed) {
             UpdateIndexBuffer();
@@ -1057,6 +1060,7 @@ void BufferCache<P>::DoUpdateGraphicsBuffers(bool is_indexed) {
 
 template <class P>
 void BufferCache<P>::DoUpdateComputeBuffers() {
+    CITRON_PROFILE_SCOPE("BufferCache::DoUpdateComputeBuffers");
     BufferOperations([&]() {
         UpdateComputeUniformBuffers();
         UpdateComputeStorageBuffers();
@@ -1164,6 +1168,7 @@ void BufferCache<P>::UpdateDrawIndirect() {
             .size = static_cast<u32>(size),
             .buffer_id = FindBuffer(*device_addr, static_cast<u32>(size)),
         };
+        SynchronizeBuffer(slot_buffers[binding.buffer_id], binding.device_addr, binding.size);
     };
     if (current_draw_indirect->include_count) {
         update(current_draw_indirect->count_start_address, sizeof(u32),

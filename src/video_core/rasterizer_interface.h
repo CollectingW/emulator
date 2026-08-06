@@ -130,6 +130,13 @@ public:
     /// Notify the host renderer to wait for previous primitive and compute operations.
     virtual void WaitForIdle() = 0;
 
+    /// Blocks the calling host thread until all previously submitted GPU work has actually
+    /// finished executing. Unlike WaitForIdle (a same-queue GPU-side pipeline barrier that
+    /// doesn't block the host at all), this is a true host-side completion wait. Needed before
+    /// releasing GPU-visible memory (e.g. presentation buffer queue teardown) that the GPU may
+    /// still be reading from -- doing so without this guarantee has caused real device loss.
+    virtual void WaitForGPUCompletion() {}
+
     /// Notify the host renderer to wait for reads and writes to render targets and flush caches.
     virtual void FragmentBarrier() = 0;
 

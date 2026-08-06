@@ -16,6 +16,8 @@
 #include "video_core/host_shaders/astc_decoder_comp_spv.h"
 #include "video_core/host_shaders/convert_msaa_to_non_msaa_comp_spv.h"
 #include "video_core/host_shaders/convert_non_msaa_to_msaa_comp_spv.h"
+#include "video_core/host_shaders/indirect_dispatch_clamp_comp_spv.h"
+#include "video_core/host_shaders/indirect_draw_clamp_comp_spv.h"
 #include "video_core/host_shaders/queries_prefix_scan_sum_comp_spv.h"
 #include "video_core/host_shaders/queries_prefix_scan_sum_nosubgroups_comp_spv.h"
 #include "video_core/host_shaders/resolve_conditional_render_comp_spv.h"
@@ -162,10 +164,39 @@ constexpr DescriptorBankInfo MSAA_BANK_INFO{
     .score = 2,
 };
 
+constexpr std::array<VkDescriptorSetLayoutBinding, 1> INDIRECT_CLAMP_DESCRIPTOR_SET_BINDINGS{{
+    {
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+        .pImmutableSamplers = nullptr,
+    },
+}};
+
+constexpr DescriptorBankInfo INDIRECT_CLAMP_BANK_INFO{
+    .uniform_buffers = 0,
+    .storage_buffers = 1,
+    .texture_buffers = 0,
+    .image_buffers = 0,
+    .textures = 0,
+    .images = 0,
+    .score = 1,
+};
+
 constexpr VkDescriptorUpdateTemplateEntry INPUT_OUTPUT_DESCRIPTOR_UPDATE_TEMPLATE{
     .dstBinding = 0,
     .dstArrayElement = 0,
     .descriptorCount = 2,
+    .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    .offset = 0,
+    .stride = sizeof(DescriptorUpdateEntry),
+};
+
+constexpr VkDescriptorUpdateTemplateEntry INDIRECT_CLAMP_DESCRIPTOR_UPDATE_TEMPLATE{
+    .dstBinding = 0,
+    .dstArrayElement = 0,
+    .descriptorCount = 1,
     .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
     .offset = 0,
     .stride = sizeof(DescriptorUpdateEntry),
@@ -401,6 +432,120 @@ std::pair<VkBuffer, VkDeviceSize> QuadIndexedPass::Assemble(
         cmdbuf.Dispatch(Common::DivCeil(num_tri_vertices, DISPATCH_SIZE), 1, 1);
         cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                                VK_PIPELINE_STAGE_VERTEX_INPUT_BIT, 0, WRITE_BARRIER);
+    });
+    return {staging.buffer, staging.offset};
+}
+
+IndirectDispatchClampPass::IndirectDispatchClampPass(
+    const Device& device_, Scheduler& scheduler_, DescriptorPool& descriptor_pool_,
+    ComputePassDescriptorQueue& compute_pass_descriptor_queue_)
+    : ComputePass(device_, descriptor_pool_, INDIRECT_CLAMP_DESCRIPTOR_SET_BINDINGS,
+                  INDIRECT_CLAMP_DESCRIPTOR_UPDATE_TEMPLATE, INDIRECT_CLAMP_BANK_INFO,
+                  COMPUTE_PUSH_CONSTANT_RANGE<sizeof(u32)>, INDIRECT_DISPATCH_CLAMP_COMP_SPV),
+      scheduler{scheduler_}, compute_pass_descriptor_queue{compute_pass_descriptor_queue_} {}
+
+void IndirectDispatchClampPass::Clamp(VkBuffer buffer, VkDeviceSize offset, u32 max_dim) {
+    compute_pass_descriptor_queue.Acquire();
+    compute_pass_descriptor_queue.AddBuffer(buffer, offset, 12);
+    const void* const descriptor_data{compute_pass_descriptor_queue.UpdateData()};
+
+    scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.Record([this, descriptor_data, max_dim](vk::CommandBuffer cmdbuf) {
+        static constexpr VkMemoryBarrier read_barrier{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+        };
+        static constexpr VkMemoryBarrier write_barrier{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
+        };
+        const VkDescriptorSet set = descriptor_allocator.Commit();
+        device.GetLogical().UpdateDescriptorSet(set, *descriptor_template, descriptor_data);
+
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, read_barrier);
+        cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *pipeline);
+        cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, *layout, 0, set, {});
+        cmdbuf.PushConstants(*layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(max_dim), &max_dim);
+        cmdbuf.Dispatch(1, 1, 1);
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, write_barrier);
+    });
+}
+
+IndirectDrawClampPass::IndirectDrawClampPass(
+    const Device& device_, Scheduler& scheduler_, DescriptorPool& descriptor_pool_,
+    StagingBufferPool& staging_buffer_pool_,
+    ComputePassDescriptorQueue& compute_pass_descriptor_queue_)
+    : ComputePass(device_, descriptor_pool_, INPUT_OUTPUT_DESCRIPTOR_SET_BINDINGS,
+                  INPUT_OUTPUT_DESCRIPTOR_UPDATE_TEMPLATE, INPUT_OUTPUT_BANK_INFO,
+                  COMPUTE_PUSH_CONSTANT_RANGE<sizeof(u32) * 4>, INDIRECT_DRAW_CLAMP_COMP_SPV),
+      scheduler{scheduler_}, staging_buffer_pool{staging_buffer_pool_},
+      compute_pass_descriptor_queue{compute_pass_descriptor_queue_} {}
+
+std::pair<VkBuffer, VkDeviceSize> IndirectDrawClampPass::Clamp(VkBuffer buffer,
+                                                                VkDeviceSize offset,
+                                                                u32 draw_count, u32 stride,
+                                                                bool is_indexed) {
+    static constexpr u32 MaxVertexOrIndexCount = 200'000;
+    static constexpr u32 MaxInstanceCount = 2'000;
+
+    // Vulkan only requires stride >= sizeof(VkDrawIndexedIndirectCommand) when drawCount > 1; for
+    // drawCount == 1 (the common case) stride may legitimately be 0. A zero-size descriptor range
+    // is invalid regardless, so always cover at least one full command struct.
+    const u32 effective_stride =
+        stride != 0 ? stride : static_cast<u32>(sizeof(VkDrawIndexedIndirectCommand));
+    const u32 total_size = draw_count * effective_stride;
+    // VkDrawIndirectCommand is 4 words, VkDrawIndexedIndirectCommand is 5 -- only copy the real
+    // struct fields, never past them, regardless of what stride padding looks like.
+    const u32 cmd_words = is_indexed ? 5 : 4;
+
+    // Copy into a fresh scratch buffer instead of clamping in place: `buffer` here is backed by
+    // guest memory (it's the same bytes citron's macro/command-stream parameter reads come from),
+    // so writing clamped values back into it would corrupt real game data that gets read again
+    // later -- this was happening and poisoning subsequent macro parameter reads with our own
+    // clamp constants.
+    const auto staging = staging_buffer_pool.Request(total_size, MemoryUsage::DeviceLocal);
+
+    compute_pass_descriptor_queue.Acquire();
+    compute_pass_descriptor_queue.AddBuffer(buffer, offset, total_size);
+    compute_pass_descriptor_queue.AddBuffer(staging.buffer, staging.offset, total_size);
+    const void* const descriptor_data{compute_pass_descriptor_queue.UpdateData()};
+
+    scheduler.RequestOutsideRenderPassOperationContext();
+    scheduler.Record([this, descriptor_data, draw_count, effective_stride,
+                      cmd_words](vk::CommandBuffer cmdbuf) {
+        static constexpr VkMemoryBarrier read_barrier{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+        };
+        static constexpr VkMemoryBarrier write_barrier{
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .pNext = nullptr,
+            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
+        };
+        const std::array<u32, 4> push_constants{effective_stride / static_cast<u32>(sizeof(u32)),
+                                                MaxVertexOrIndexCount, MaxInstanceCount,
+                                                cmd_words};
+        const VkDescriptorSet set = descriptor_allocator.Commit();
+        device.GetLogical().UpdateDescriptorSet(set, *descriptor_template, descriptor_data);
+
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, read_barrier);
+        cmdbuf.BindPipeline(VK_PIPELINE_BIND_POINT_COMPUTE, *pipeline);
+        cmdbuf.BindDescriptorSets(VK_PIPELINE_BIND_POINT_COMPUTE, *layout, 0, set, {});
+        cmdbuf.PushConstants(*layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push_constants),
+                             &push_constants);
+        cmdbuf.Dispatch(draw_count, 1, 1);
+        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                               VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT, 0, write_barrier);
     });
     return {staging.buffer, staging.offset};
 }

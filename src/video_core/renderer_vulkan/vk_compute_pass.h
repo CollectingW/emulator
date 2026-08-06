@@ -85,6 +85,42 @@ private:
     ComputePassDescriptorQueue& compute_pass_descriptor_queue;
 };
 
+class IndirectDispatchClampPass final : public ComputePass {
+public:
+    explicit IndirectDispatchClampPass(const Device& device_, Scheduler& scheduler_,
+                                       DescriptorPool& descriptor_pool_,
+                                       ComputePassDescriptorQueue& compute_pass_descriptor_queue_);
+
+    /// Clamps the 3 dispatch dimensions at (buffer, offset) to max_dim in place, on the GPU,
+    /// before an indirect dispatch reads them.
+    void Clamp(VkBuffer buffer, VkDeviceSize offset, u32 max_dim);
+
+private:
+    Scheduler& scheduler;
+    ComputePassDescriptorQueue& compute_pass_descriptor_queue;
+};
+
+class IndirectDrawClampPass final : public ComputePass {
+public:
+    explicit IndirectDrawClampPass(const Device& device_, Scheduler& scheduler_,
+                                   DescriptorPool& descriptor_pool_,
+                                   StagingBufferPool& staging_buffer_pool_,
+                                   ComputePassDescriptorQueue& compute_pass_descriptor_queue_);
+
+    /// Copies each indirect draw command from (buffer, offset) into a fresh scratch buffer,
+    /// clamping vertex/index count and instance count along the way. The source buffer is
+    /// left untouched -- it's backed by guest memory that other code later reads as real
+    /// command-stream/macro-parameter data, so clamping it in place would corrupt that data.
+    /// Returns the scratch buffer + offset the real indirect draw should read from instead.
+    std::pair<VkBuffer, VkDeviceSize> Clamp(VkBuffer buffer, VkDeviceSize offset, u32 draw_count,
+                                            u32 stride, bool is_indexed);
+
+private:
+    Scheduler& scheduler;
+    StagingBufferPool& staging_buffer_pool;
+    ComputePassDescriptorQueue& compute_pass_descriptor_queue;
+};
+
 class ConditionalRenderingResolvePass final : public ComputePass {
 public:
     explicit ConditionalRenderingResolvePass(

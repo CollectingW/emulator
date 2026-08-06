@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+
 #include "common/assert.h"
 #include "common/logging.h"
 #include "common/scope_exit.h"
@@ -172,11 +176,51 @@ bool HardwareContext::InitializeForDecoder(DecoderContext& decoder_context,
     return false;
 }
 
+namespace {
+// av_hwdevice_ctx_create has no cancellation mechanism and can hang indefinitely inside the
+// driver for some device types (observed: cuCtxCreate_v2 for CUDA deadlocking against
+// concurrent Vulkan pipeline compilation on the same GPU). Run it on a detached thread and
+// bound how long we wait for it. On timeout the detached thread is abandoned (there is no safe
+// way to cancel a thread stuck inside a closed-source driver call) but the caller gets control
+// back and can fall back to software decoding instead of hanging the whole emulator.
+struct HwDeviceCreateResult {
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool done = false;
+    int ret = -1;
+    AVBufferRef* gpu_decoder = nullptr;
+};
+
+int CreateHwDeviceWithTimeout(AVBufferRef** out_gpu_decoder, AVHWDeviceType type) {
+    static constexpr auto Timeout = std::chrono::seconds{5};
+    auto result = std::make_shared<HwDeviceCreateResult>();
+    std::thread([type, result] {
+        AVBufferRef* gpu_decoder = nullptr;
+        const int ret = av_hwdevice_ctx_create(&gpu_decoder, type, nullptr, nullptr, 0);
+        std::scoped_lock lock{result->mutex};
+        result->ret = ret;
+        result->gpu_decoder = gpu_decoder;
+        result->done = true;
+        result->cv.notify_all();
+    }).detach();
+
+    std::unique_lock lock{result->mutex};
+    if (!result->cv.wait_for(lock, Timeout, [&] { return result->done; })) {
+        LOG_CRITICAL(HW_GPU,
+                    "av_hwdevice_ctx_create({}) timed out after {}s, GPU driver appears hung "
+                    "-- falling back to software decoding",
+                    av_hwdevice_get_type_name(type), Timeout.count());
+        return AVERROR(ETIMEDOUT);
+    }
+    *out_gpu_decoder = result->gpu_decoder;
+    return result->ret;
+}
+} // Anonymous namespace
+
 bool HardwareContext::InitializeWithType(AVHWDeviceType type) {
     av_buffer_unref(&m_gpu_decoder);
 
-    if (const int ret = av_hwdevice_ctx_create(&m_gpu_decoder, type, nullptr, nullptr, 0);
-        ret < 0) {
+    if (const int ret = CreateHwDeviceWithTimeout(&m_gpu_decoder, type); ret < 0) {
         LOG_DEBUG(HW_GPU, "av_hwdevice_ctx_create({}) failed: {}", av_hwdevice_get_type_name(type),
                   AVError(ret));
         return false;

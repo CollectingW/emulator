@@ -15,6 +15,7 @@
 #include "common/literals.h"
 #include <ranges>
 #include "common/settings.h"
+#include "video_core/gpu_op_trace.h"
 #include "video_core/vulkan_common/nsight_aftermath_tracker.h"
 #include "video_core/vulkan_common/vma.h"
 #include "video_core/vulkan_common/vulkan_device.h"
@@ -842,55 +843,39 @@ VkFormat Device::GetSupportedFormat(VkFormat wanted_format, VkFormatFeatureFlags
 
 void Device::ReportLoss() const {
     LOG_CRITICAL(Render_Vulkan, "Device loss occurred!");
-    if (extensions.device_fault) {
-        VkDeviceFaultCountsEXT fault_counts{
-            .sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT
-        };
-        dld.vkGetDeviceFaultInfoEXT(VkDevice(GetLogical().address()), &fault_counts, nullptr);
-        std::vector<VkDeviceFaultAddressInfoEXT> address_info(fault_counts.addressInfoCount);
-        std::vector<VkDeviceFaultVendorInfoEXT> vendor_info(fault_counts.vendorInfoCount);
-        std::vector<u8> vendor_binary_data(fault_counts.vendorBinarySize);
-        VkDeviceFaultInfoEXT fault_info{
-            .sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT,
-            .pAddressInfos = address_info.data(),
-            .pVendorInfos = vendor_info.data(),
-            .pVendorBinaryData = vendor_binary_data.data()
-        };
-        dld.vkGetDeviceFaultInfoEXT(VkDevice(GetLogical().address()), &fault_counts, &fault_info);
-        std::string s = "Fault report\n";
-        if (address_info.size() > 0) {
-            s += "address-info\n";
-            for (auto const& ai : address_info) {
-                s += fmt::format("{:#x} => {}\n", ai.reportedAddress, [t = ai.addressType] {
-                    switch (t) {
-#define VKFATC(n) case n: return #n;
-                    VKFATC(VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_INVALID_EXT)
-                    VKFATC(VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_FAULT_EXT)
-                    VKFATC(VK_DEVICE_FAULT_ADDRESS_TYPE_INSTRUCTION_POINTER_UNKNOWN_EXT)
-                    VKFATC(VK_DEVICE_FAULT_ADDRESS_TYPE_WRITE_INVALID_EXT)
-                    VKFATC(VK_DEVICE_FAULT_ADDRESS_TYPE_READ_INVALID_EXT)
-                    VKFATC(VK_DEVICE_FAULT_ADDRESS_TYPE_EXECUTE_INVALID_EXT)
-                    VKFATC(VK_DEVICE_FAULT_ADDRESS_TYPE_NONE_EXT)
-#undef VKFATC
-                    default: return "unknown";
-                    }
-                }());
-            }
+    const u64 last_submitted = VideoCore::g_gpu_op_trace.counter.load();
+    LOG_CRITICAL(Render_Vulkan, "Last CPU-submitted GPU op: #{}", last_submitted);
+    if (extensions.device_diagnostic_checkpoints) {
+        const auto checkpoints = graphics_queue.GetCheckpointDataNV();
+        if (checkpoints.empty()) {
+            LOG_CRITICAL(Render_Vulkan, "No GPU checkpoints returned (queue already idle/reset)");
         }
-        if (vendor_info.size() > 0) {
-            s += "vendor-info\n";
-            for (auto const& vi : vendor_info)
-                s += fmt::format("{:#x}-{:#x}: {}\n", vi.vendorFaultCode, vi.vendorFaultCode, vi.description);
+        for (const auto& checkpoint : checkpoints) {
+            const u64 index = static_cast<u64>(reinterpret_cast<uintptr_t>(checkpoint.pCheckpointMarker));
+            const auto op = VideoCore::LookupGpuOp(index);
+            LOG_CRITICAL(Render_Vulkan,
+                        "GPU checkpoint: stage={:#x} op #{} (behind CPU by {}) = {} "
+                        "(args={},{},{}) render_area={}x{} pipeline stage hashes={:016x} "
+                        "{:016x} {:016x} {:016x} {:016x} {:016x}",
+                        static_cast<u32>(checkpoint.stage), index, last_submitted - index,
+                        VideoCore::GpuOpKindName(op.kind), op.arg0, op.arg1, op.arg2,
+                        op.render_width, op.render_height, op.pipeline_stage_hashes[0],
+                        op.pipeline_stage_hashes[1], op.pipeline_stage_hashes[2],
+                        op.pipeline_stage_hashes[3], op.pipeline_stage_hashes[4],
+                        op.pipeline_stage_hashes[5]);
         }
-        if (vendor_binary_data.size() > 0) {
-            s += "vendor-binary-data\n";
-            for (size_t i = 0; i < vendor_binary_data.size(); ++i)
-                s += fmt::format("{:02x} ", vendor_binary_data[i]);
-            s += "\n";
-        }
+    } else {
+        LOG_CRITICAL(Render_Vulkan,
+                    "VK_NV_device_diagnostic_checkpoints not supported -- cannot ask the GPU "
+                    "what it actually reached");
     }
-    // Wait for the log to flush and for Nsight Aftermath to dump the results
-    std::this_thread::sleep_for(std::chrono::seconds{15});
+    // vkGetDeviceFaultInfoEXT segfaults inside the NVIDIA driver (libnvidia-glcore) when queried
+    // on an already-lost device -- confirmed via core dump, not a hypothetical. Skip it rather
+    // than crash the process while trying to report a crash.
+    if (nsight_aftermath_tracker) {
+        // Wait for the log to flush and for Nsight Aftermath to dump the results
+        std::this_thread::sleep_for(std::chrono::seconds{15});
+    }
 }
 
 void Device::SaveShader(std::span<const u32> spirv) const {

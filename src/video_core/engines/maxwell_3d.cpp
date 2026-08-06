@@ -9,6 +9,7 @@
 #include "common/settings.h"
 #include "core/core.h"
 #include "core/core_timing.h"
+#include "core/device_memory.h"
 #include "video_core/arm64_register_guard.h"
 #include "video_core/dirty_flags.h"
 #include "video_core/engines/draw_manager.h"
@@ -223,6 +224,24 @@ void Maxwell3D::ProcessMacro(u32 method, const u32* base_start, u32 amount, bool
         macro_segments.clear();
         current_macro_dirty = false;
     }
+}
+
+bool Maxwell3D::DiagIsMappedGpuAddress(GPUVAddr addr) const {
+    return memory_manager.GpuToCpuAddress(addr).has_value();
+}
+
+u32 Maxwell3D::DiagReadFreshGpuWord(GPUVAddr addr) const {
+    u32 value = 0;
+    memory_manager.ReadBlock(addr, &value, sizeof(value));
+    return value;
+}
+
+u64 Maxwell3D::DiagResolveHostPointer(GPUVAddr addr) const {
+    const auto daddr = memory_manager.GpuToCpuAddress(addr);
+    if (!daddr) {
+        return 0;
+    }
+    return reinterpret_cast<u64>(system.DeviceMemory().GetPointerFromRaw<u8>(*daddr));
 }
 
 void Maxwell3D::RefreshParametersImpl() {

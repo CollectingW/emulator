@@ -11,6 +11,9 @@
 
 #include <boost/context/detail/fcontext.hpp>
 
+// TEMP: TracyFiberEnter/Leave corrupt captures (see citron-switch-sports-freeze memory). Disabled for now.
+#define CITRON_TRACY_FIBER_DIAGNOSTIC_DISABLE 1
+
 namespace Common {
 
 constexpr std::size_t DEFAULT_STACK_SIZE = 512 * 1024;
@@ -97,7 +100,7 @@ void Fiber::Exit() {
     if (!impl->is_thread_fiber) {
         return;
     }
-#if defined(CITRON_ENABLE_TRACY) && CITRON_ENABLE_TRACY
+#if defined(CITRON_ENABLE_TRACY) && CITRON_ENABLE_TRACY && !CITRON_TRACY_FIBER_DIAGNOSTIC_DISABLE
     TracyFiberLeave;
 #endif
     impl->guard.unlock();
@@ -117,7 +120,7 @@ void Fiber::YieldTo(std::weak_ptr<Fiber> weak_from, Fiber& to) {
     to.impl->guard.lock();
     to.impl->previous_fiber = weak_from.lock();
 
-#if defined(CITRON_ENABLE_TRACY) && CITRON_ENABLE_TRACY
+#if defined(CITRON_ENABLE_TRACY) && CITRON_ENABLE_TRACY && !CITRON_TRACY_FIBER_DIAGNOSTIC_DISABLE
     TracyFiberEnter(to.GetName().c_str());
 #endif
     auto transfer = boost::context::detail::jump_fcontext(to.impl->context, &to);

@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <chrono>
+
 #include "common/assert.h"
 #include "common/logging.h"
 #include "common/settings.h"
@@ -14,6 +16,8 @@
 #include "video_core/engines/maxwell_dma.h"
 #include "video_core/engines/puller.h"
 #include "video_core/gpu.h"
+#include "video_core/host1x/host1x.h"
+#include "video_core/host1x/syncpoint_manager.h"
 #include "video_core/memory_manager.h"
 #include "video_core/rasterizer_interface.h"
 
@@ -61,11 +65,17 @@ void Puller::ProcessBindMethod(const MethodCall& method_call) {
 
 void Puller::ProcessFenceActionMethod() {
     switch (regs.fence_action.op) {
-    case Puller::FenceOperation::Acquire:
-        // UNIMPLEMENTED_MSG("Channel Scheduling pending.");
-        // WaitFence(regs.fence_action.syncpoint_id, regs.fence_value);
+    case Puller::FenceOperation::Acquire: {
+        const u32 syncpoint_id = regs.fence_action.syncpoint_id.Value();
+        const bool reached = gpu.Host1x().GetSyncpointManager().WaitHost(
+            syncpoint_id, regs.fence_value, std::chrono::milliseconds{100});
+        if (!reached) {
+            LOG_WARNING(HW_GPU, "Fence acquire timed out syncpoint_id={} expected={}",
+                        syncpoint_id, regs.fence_value);
+        }
         rasterizer->ReleaseFences();
         break;
+    }
     case Puller::FenceOperation::Increment:
         rasterizer->SignalSyncPoint(regs.fence_action.syncpoint_id);
         break;

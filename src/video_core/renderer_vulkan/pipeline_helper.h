@@ -85,13 +85,26 @@ public:
             .size = static_cast<u32>(sizeof(RescalingLayout)) - size_offset +
                     static_cast<u32>(sizeof(RenderAreaLayout)),
         };
+        // pSetLayouts must have no null gaps. Some callers intentionally want a set-1-only
+        // layout (e.g. a dedicated pipeline layout used only to bind the resource set via
+        // firstSet=1) with no set 0 of their own -- that still needs a *valid* (if empty)
+        // set 0 placeholder, not a null one. A VkDescriptorSetLayout doesn't need to outlive
+        // vkCreatePipelineLayout, so this can be a throwaway local.
+        vk::DescriptorSetLayout empty_set_layout;
+        if (!descriptor_set_layout && resource_set_layout) {
+            empty_set_layout = device->GetLogical().CreateDescriptorSetLayout({
+                .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+                .pNext = nullptr,
+                .flags = 0,
+                .bindingCount = 0,
+                .pBindings = nullptr,
+            });
+            descriptor_set_layout = *empty_set_layout;
+        }
         std::array<VkDescriptorSetLayout, 2> set_layouts{descriptor_set_layout, resource_set_layout};
         u32 set_count = 0;
         if (descriptor_set_layout) {
-            set_count = 1;
-        }
-        if (resource_set_layout) {
-            set_count = 2;
+            set_count = resource_set_layout ? 2 : 1;
         }
         return device->GetLogical().CreatePipelineLayout({
             .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,

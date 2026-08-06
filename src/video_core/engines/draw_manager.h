@@ -29,6 +29,9 @@ public:
         IndexBuffer index_buffer;
         u32 base_instance{};
         u32 instance_count{};
+        // base_instance counter for DrawArrayInstanced, kept separate from instance_count above
+        // (the DrawBegin/DrawEnd/DrawDeferred batch counter) so the two can't corrupt each other.
+        u32 array_instance_index{};
         std::vector<u8> inline_index_draw_indexes;
     };
 

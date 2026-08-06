@@ -16,6 +16,7 @@
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_vulkan/blit_image.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
+#include "video_core/renderer_vulkan/vk_compute_pass.h"
 #include "video_core/renderer_vulkan/vk_descriptor_pool.h"
 #include "video_core/renderer_vulkan/vk_fence_manager.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
@@ -118,6 +119,7 @@ public:
     void FlushAndInvalidateRegion(
         DAddr addr, u64 size, VideoCommon::CacheType which = VideoCommon::CacheType::All) override;
     void WaitForIdle() override;
+    void WaitForGPUCompletion() override;
     void FragmentBarrier() override;
     void TiledCacheBarrier() override;
     void FlushCommands() override;
@@ -216,6 +218,8 @@ private:
     PipelineCache pipeline_cache;
     AccelerateDMA accelerate_dma;
     FenceManager fence_manager;
+    IndirectDispatchClampPass indirect_dispatch_clamp_pass;
+    IndirectDrawClampPass indirect_draw_clamp_pass;
 
     vk::Event wfi_event;
 

@@ -240,6 +240,8 @@ struct DeviceDispatch : InstanceDispatch {
     PFN_vkCmdSetLogicOpEnableEXT vkCmdSetLogicOpEnableEXT{};
     PFN_vkCmdSetDepthClampEnableEXT vkCmdSetDepthClampEnableEXT{};
     PFN_vkCmdSetEvent vkCmdSetEvent{};
+    PFN_vkCmdSetCheckpointNV vkCmdSetCheckpointNV{};
+    PFN_vkGetQueueCheckpointDataNV vkGetQueueCheckpointDataNV{};
     PFN_vkCmdSetFrontFaceEXT vkCmdSetFrontFaceEXT{};
     PFN_vkCmdSetPatchControlPointsEXT vkCmdSetPatchControlPointsEXT{};
     PFN_vkCmdSetLogicOpEXT vkCmdSetLogicOpEXT{};
@@ -772,6 +774,22 @@ public:
 
     VkResult Present(const VkPresentInfoKHR& present_info) const noexcept {
         return dld->vkQueuePresentKHR(queue, &present_info);
+    }
+
+    /// Returns the last GPU-side checkpoints (VK_NV_device_diagnostic_checkpoints) reached on
+    /// this queue -- meant to be called right after a device-lost event to find out how far the
+    /// GPU actually got, independent of what the CPU last submitted. The caller must check
+    /// Device::IsExtDeviceDiagnosticCheckpointsSupported() before calling this.
+    std::vector<VkCheckpointDataNV> GetCheckpointDataNV() const {
+        u32 count = 0;
+        dld->vkGetQueueCheckpointDataNV(queue, &count, nullptr);
+        std::vector<VkCheckpointDataNV> data(count);
+        for (auto& entry : data) {
+            entry.sType = VK_STRUCTURE_TYPE_CHECKPOINT_DATA_NV;
+            entry.pNext = nullptr;
+        }
+        dld->vkGetQueueCheckpointDataNV(queue, &count, data.data());
+        return data;
     }
 
 private:
@@ -1359,6 +1377,13 @@ public:
 
     void SetEvent(VkEvent event, VkPipelineStageFlags stage_flags) const noexcept {
         dld->vkCmdSetEvent(handle, event, stage_flags);
+    }
+
+    /// Drops a GPU-side checkpoint (VK_NV_device_diagnostic_checkpoints) that can be read back
+    /// via Queue::GetCheckpointDataNV after a device-lost event, to find out how far the GPU
+    /// actually got -- the caller must check the extension is supported before calling this.
+    void SetCheckpointNV(const void* marker) const noexcept {
+        dld->vkCmdSetCheckpointNV(handle, marker);
     }
 
     void WaitEvents(Span<VkEvent> events, VkPipelineStageFlags src_stage_mask,

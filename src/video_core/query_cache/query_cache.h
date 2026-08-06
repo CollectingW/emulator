@@ -207,6 +207,15 @@ void QueryCacheBase<Traits>::CounterClose(QueryType counter_type) {
 }
 
 template <typename Traits>
+void QueryCacheBase<Traits>::PauseAllCounters() {
+    for (StreamerInterface* streamer : impl->streamers) {
+        if (streamer) {
+            streamer->PauseCounter();
+        }
+    }
+}
+
+template <typename Traits>
 void QueryCacheBase<Traits>::CounterReset(QueryType counter_type) {
     size_t index = static_cast<size_t>(counter_type);
     StreamerInterface* streamer = impl->streamers[index];

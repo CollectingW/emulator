@@ -358,6 +358,13 @@ struct GPU::Impl {
         WaitForSyncOperation(wait_fence);
     }
 
+    void WaitForGPUCompletion() {
+        const auto wait_fence =
+            RequestSyncOperation([this] { rasterizer->WaitForGPUCompletion(); });
+        gpu_thread.TickGPU();
+        WaitForSyncOperation(wait_fence);
+    }
+
     std::vector<u8> GetAppletCaptureBuffer() {
         std::vector<u8> out;
 
@@ -445,6 +452,10 @@ void GPU::BindRenderer(std::unique_ptr<VideoCore::RendererBase> renderer) {
 
 void GPU::FlushCommands() {
     impl->FlushCommands();
+}
+
+void GPU::WaitForGPUCompletion() {
+    impl->WaitForGPUCompletion();
 }
 
 void GPU::InvalidateGPUCache() {

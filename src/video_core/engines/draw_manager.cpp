@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
 #include <exception>
 
+#include "common/logging.h"
 #include "common/settings.h"
 #include "video_core/arm64_register_guard.h"
 #include "video_core/dirty_flags.h"
@@ -67,8 +69,8 @@ void DrawManager::ProcessMethodCall(u32 method, u32 argument) {
     case MAXWELL3D_REG_INDEX(index_buffer32_subsequent):
     case MAXWELL3D_REG_INDEX(index_buffer16_subsequent):
     case MAXWELL3D_REG_INDEX(index_buffer8_subsequent):
-        draw_state.instance_count++;
-        [[fallthrough]];
+        // No instance_count++ here anymore -- DrawIndexSmall() ignores it and always submits
+        // count=1; the increment only corrupted the unrelated DrawBegin/DrawEnd batch counter.
     case MAXWELL3D_REG_INDEX(index_buffer32_first):
     case MAXWELL3D_REG_INDEX(index_buffer16_first):
     case MAXWELL3D_REG_INDEX(index_buffer8_first):
@@ -136,12 +138,11 @@ void DrawManager::DrawArrayInstanced(PrimitiveTopology topology, u32 vertex_firs
     draw_state.vertex_buffer.count = vertex_count;
 
     if (!subsequent) {
-        draw_state.instance_count = 1;
+        draw_state.array_instance_index = 0;
     }
 
-    draw_state.base_instance = draw_state.instance_count - 1;
-    draw_state.draw_mode = DrawMode::Instance;
-    draw_state.instance_count++;
+    draw_state.base_instance = draw_state.array_instance_index;
+    draw_state.array_instance_index++;
     ProcessDraw(false, 1);
 }
 
