@@ -375,7 +375,12 @@ void RasterizerVulkan::Draw(bool is_indexed, u32 instance_count) {
     CITRON_PROFILE_SCOPE("RasterizerVulkan::Draw");
     PrepareDraw(is_indexed, [this, is_indexed, instance_count] {
         const auto& draw_state = maxwell3d->draw_manager->GetDrawState();
-        const u32 num_instances{instance_count};
+        // If the vertex shader never reads InstanceId, every instance is identical output --
+        // safe to force to 1 regardless of what was requested, since there's no real
+        // per-instance content to lose. General, not tied to any specific game/macro.
+        const GraphicsPipeline* const pipeline = pipeline_cache.CurrentGraphicsPipeline();
+        const u32 num_instances{
+            (pipeline && !pipeline->VertexUsesInstanceId()) ? 1u : instance_count};
         const DrawParams draw_params{MakeDrawParams(draw_state, num_instances, is_indexed)};
         const u64 op_index = VideoCore::RecordGpuOpGraphics(
             is_indexed ? VideoCore::GpuOpKind::DrawIndexed : VideoCore::GpuOpKind::Draw,

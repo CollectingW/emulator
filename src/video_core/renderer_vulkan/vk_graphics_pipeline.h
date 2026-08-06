@@ -103,6 +103,12 @@ public:
         return is_built.load(std::memory_order::acquire);
     }
 
+    // True if this pipeline's vertex shader actually reads InstanceId -- if it doesn't, every
+    // instance renders identical output and instance_count can be safely forced to 1.
+    [[nodiscard]] bool VertexUsesInstanceId() const noexcept {
+        return stage_infos[0].loads[Shader::IR::Attribute::InstanceId];
+    }
+
     [[nodiscard]] bool IsFailed() const noexcept {
         return build_failed.load(std::memory_order::acquire);
     }
