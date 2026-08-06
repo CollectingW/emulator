@@ -304,7 +304,8 @@ void HLE_DrawIndexedIndirect::Execute(Engines::Maxwell3D& maxwell3d, std::span<c
     maxwell3d.RefreshParameters();
 
     const u32 estimate = u32(maxwell3d.EstimateIndexBufferSize());
-    const u32 element_base = parameters[4];
+    // See Fallback()'s identical guard: base_vertex past the real vertex buffer reads garbage.
+    const u32 element_base = parameters[4] < maxwell3d.GetMaxCurrentVertices() ? parameters[4] : 0;
     const u32 base_instance = parameters[5];
     maxwell3d.regs.vertex_id_base = element_base;
     maxwell3d.regs.global_base_vertex_index = element_base;
@@ -338,12 +339,17 @@ void HLE_DrawIndexedIndirect::Fallback(Engines::Maxwell3D& maxwell3d, std::span<
     maxwell3d.RefreshParameters();
     // reg[0xD1B] is never written anywhere, so the old `GetRegisterValue(0xD1B) & parameters[2]`
     // mask was always a no-op (0xFFFFFFFF). Mask explicitly instead.
-    const u32 instance_count = parameters[2] & 0xFFFF;
-    const u32 element_base = parameters[4];
+    // Combined with a large index count this was tripping the GPU watchdog (Xid 109); tighter
+    // than the shared 2000 backstop since this macro's content doesn't need that many.
+    static constexpr u32 MaxSaneInstanceCount = 512;
+    const u32 instance_count = std::min(parameters[2] & 0xFFFF, MaxSaneInstanceCount);
     const u32 base_instance = parameters[5];
-    // parameters[1] (index count) has been observed wildly exceeding what the actually-bound
-    // index buffer can hold -- clamp to what's really there instead of trusting it blindly.
+    // parameters[1] (index count) and parameters[4] (base_vertex) have both been observed
+    // wildly exceeding what's actually bound -- a base_vertex past the real vertex buffer
+    // reads garbage position/normal/UV data, producing exploded-looking black geometry.
+    // Clamp both to what's really there instead of trusting them blindly.
     const u32 real_index_count = std::min(parameters[1], u32(maxwell3d.EstimateIndexBufferSize()));
+    const u32 element_base = parameters[4] < maxwell3d.GetMaxCurrentVertices() ? parameters[4] : 0;
     maxwell3d.regs.vertex_id_base = element_base;
     maxwell3d.regs.global_base_vertex_index = element_base;
     maxwell3d.regs.global_base_instance_index = base_instance;

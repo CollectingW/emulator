@@ -68,7 +68,7 @@ void Scheduler::WaitWorker() {
     // Ensure the queue is drained.
     {
         std::unique_lock ql{queue_mutex};
-        event_cv.wait(ql, [this] { return work_queue.empty(); });
+        event_cv.wait(ql, [this] { return work_queue.empty() || device_lost.load(); });
     }
 
     // Now wait for execution to finish.
@@ -225,8 +225,11 @@ void Scheduler::WorkerThread(std::stop_token stop_token) {
                 // An uncaught exception here would escape std::jthread's entry function and
                 // terminate the whole process (e.g. on device loss). Nothing further can be
                 // submitted once the device is gone, so just stop the worker instead of crashing.
+                // Wake anyone blocked in WaitWorker(), or they wait forever.
                 LOG_CRITICAL(Render_Vulkan, "Vulkan worker thread caught exception: {}, stopping",
                             exception.what());
+                device_lost = true;
+                event_cv.notify_all();
                 return;
             }
 

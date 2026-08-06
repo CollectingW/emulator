@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
@@ -264,6 +265,8 @@ private:
     std::mutex queue_mutex;
     std::condition_variable_any event_cv;
     std::jthread worker_thread;
+    // Set if the worker thread dies on VK_ERROR_DEVICE_LOST, so WaitWorker() doesn't hang.
+    std::atomic<bool> device_lost{false};
 };
 
 } // namespace Vulkan
