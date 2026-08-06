@@ -277,7 +277,10 @@ void HLE_DrawArraysIndirect::Fallback(Engines::Maxwell3D& maxwell3d, std::span<c
     const u32 max_vertices = maxwell3d.GetMaxCurrentVertices();
     const u32 vertex_first = parameters[3] < max_vertices ? parameters[3] : 0;
     const u32 vertex_count = std::min(parameters[1], max_vertices - vertex_first);
-    const u32 base_instance = parameters[4];
+    // Same flat-ceiling guard used elsewhere -- was completely unclamped before.
+    static constexpr u32 MaxSaneInstanceOffset = 100'000;
+    const u32 base_instance = parameters[4] < MaxSaneInstanceOffset ? parameters[4] : 0;
+    const u32 saved_base_instance = maxwell3d.regs.global_base_instance_index;
     if (extended) {
         maxwell3d.regs.global_base_instance_index = base_instance;
         maxwell3d.engine_state = Maxwell3D::EngineHint::OnHLEMacro;
@@ -285,7 +288,8 @@ void HLE_DrawArraysIndirect::Fallback(Engines::Maxwell3D& maxwell3d, std::span<c
     }
     maxwell3d.draw_manager->DrawArray(topology, vertex_first, vertex_count, base_instance, instance_count);
     if (extended) {
-        maxwell3d.regs.global_base_instance_index = 0;
+        // See HLE_DrawIndexedIndirect's identical save/restore -- this register can persist.
+        maxwell3d.regs.global_base_instance_index = saved_base_instance;
         maxwell3d.engine_state = Maxwell3D::EngineHint::None;
         maxwell3d.replace_table.clear();
     }
@@ -306,6 +310,12 @@ void HLE_DrawIndexedIndirect::Execute(Engines::Maxwell3D& maxwell3d, std::span<c
     // No reliable buffer-size bound exists for this like GetMaxCurrentVertices(); flat ceiling instead.
     static constexpr u32 MaxSaneInstanceOffset = 100'000;
     const u32 base_instance = parameters[5] < MaxSaneInstanceOffset ? parameters[5] : 0;
+    // These registers can persist across draws when the game doesn't rewrite them (real hardware
+    // behavior) -- save/restore instead of hard-resetting to 0, or a later non-HLE draw relying
+    // on the pre-existing value reads garbage left behind by this macro's own temporary override.
+    const u32 saved_vertex_id_base = maxwell3d.regs.vertex_id_base;
+    const u32 saved_base_vertex = maxwell3d.regs.global_base_vertex_index;
+    const u32 saved_base_instance = maxwell3d.regs.global_base_instance_index;
     maxwell3d.regs.vertex_id_base = element_base;
     maxwell3d.regs.global_base_vertex_index = element_base;
     maxwell3d.regs.global_base_instance_index = base_instance;
@@ -326,9 +336,9 @@ void HLE_DrawIndexedIndirect::Execute(Engines::Maxwell3D& maxwell3d, std::span<c
     params.stride = 0;
     maxwell3d.dirty.flags[VideoCommon::Dirty::IndexBuffer] = true;
     maxwell3d.draw_manager->DrawIndexedIndirect(topology, 0, estimate);
-    maxwell3d.regs.vertex_id_base = 0x0;
-    maxwell3d.regs.global_base_vertex_index = 0x0;
-    maxwell3d.regs.global_base_instance_index = 0x0;
+    maxwell3d.regs.vertex_id_base = saved_vertex_id_base;
+    maxwell3d.regs.global_base_vertex_index = saved_base_vertex;
+    maxwell3d.regs.global_base_instance_index = saved_base_instance;
     if (extended) {
         maxwell3d.engine_state = Maxwell3D::EngineHint::None;
         maxwell3d.replace_table.clear();
@@ -354,6 +364,10 @@ void HLE_DrawIndexedIndirect::Fallback(Engines::Maxwell3D& maxwell3d, std::span<
     // Same class as firstIndex in IndirectDrawClampPass's GPU-side buffer -- never clamped here.
     const u32 index_first = parameters[3] < index_buffer_size ? parameters[3] : 0;
     const u32 element_base = parameters[4] < maxwell3d.GetMaxCurrentVertices() ? parameters[4] : 0;
+    // See Execute()'s identical save/restore -- these registers can persist across draws.
+    const u32 saved_vertex_id_base = maxwell3d.regs.vertex_id_base;
+    const u32 saved_base_vertex = maxwell3d.regs.global_base_vertex_index;
+    const u32 saved_base_instance = maxwell3d.regs.global_base_instance_index;
     maxwell3d.regs.vertex_id_base = element_base;
     maxwell3d.regs.global_base_vertex_index = element_base;
     maxwell3d.regs.global_base_instance_index = base_instance;
@@ -364,9 +378,9 @@ void HLE_DrawIndexedIndirect::Fallback(Engines::Maxwell3D& maxwell3d, std::span<
         maxwell3d.SetHLEReplacementAttributeType(0, 0x644, Maxwell3D::HLEReplacementAttributeType::BaseInstance);
     }
     maxwell3d.draw_manager->DrawIndex(Tegra::Maxwell3D::Regs::PrimitiveTopology(parameters[0]), index_first, real_index_count, element_base, base_instance, instance_count);
-    maxwell3d.regs.vertex_id_base = 0x0;
-    maxwell3d.regs.global_base_vertex_index = 0x0;
-    maxwell3d.regs.global_base_instance_index = 0x0;
+    maxwell3d.regs.vertex_id_base = saved_vertex_id_base;
+    maxwell3d.regs.global_base_vertex_index = saved_base_vertex;
+    maxwell3d.regs.global_base_instance_index = saved_base_instance;
     if (extended) {
         maxwell3d.engine_state = Maxwell3D::EngineHint::None;
         maxwell3d.replace_table.clear();
@@ -425,9 +439,11 @@ void HLE_MultiDrawIndexedIndirectCount::Execute(Engines::Maxwell3D& maxwell3d, s
     maxwell3d.replace_table.clear();
 }
 void HLE_MultiDrawIndexedIndirectCount::Fallback(Engines::Maxwell3D& maxwell3d, std::span<const u32> parameters) {
+    // Restore instead of hard-resetting to 0 -- see HLE_DrawIndexedIndirect's identical fix,
+    // this register can persist across draws when the game doesn't rewrite it every time.
+    const u32 saved_vertex_id_base = maxwell3d.regs.vertex_id_base;
     SCOPE_EXIT {
-        // Clean everything.
-        maxwell3d.regs.vertex_id_base = 0x0;
+        maxwell3d.regs.vertex_id_base = saved_vertex_id_base;
         maxwell3d.engine_state = Maxwell3D::EngineHint::None;
         maxwell3d.replace_table.clear();
     };

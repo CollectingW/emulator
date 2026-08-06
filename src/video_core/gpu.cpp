@@ -359,6 +359,12 @@ struct GPU::Impl {
     }
 
     void WaitForGPUCompletion() {
+        // ShutdownMainProcess stops the GPU thread before triggering VI layer teardown, which
+        // calls this -- queuing to a thread that's already gone would hang forever waiting for
+        // a fence nothing will ever signal. Nothing left to race with once shutdown has begun.
+        if (shutting_down.load(std::memory_order::relaxed)) {
+            return;
+        }
         const auto wait_fence =
             RequestSyncOperation([this] { rasterizer->WaitForGPUCompletion(); });
         gpu_thread.TickGPU();
