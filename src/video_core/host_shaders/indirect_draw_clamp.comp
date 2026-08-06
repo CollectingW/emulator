@@ -1,0 +1,43 @@
+// SPDX-FileCopyrightText: Copyright 2026 Citron Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#version 450
+
+layout(local_size_x = 1) in;
+
+// VkDrawIndirectCommand is 4 words, VkDrawIndexedIndirectCommand is 5; cmd_words tells us which.
+// Indexed:     { count; instanceCount; firstIndex; vertexOffset; firstInstance }
+// Non-indexed: { count; instanceCount; firstVertex; firstInstance }
+layout(std430, binding = 0) readonly buffer SrcCommands {
+    uint src_words[];
+};
+layout(std430, binding = 1) writeonly buffer DstCommands {
+    uint dst_words[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint stride_words;
+    uint max_count;
+    uint max_instances;
+    uint cmd_words;
+    uint max_vertices;
+    uint max_first_instance;
+};
+
+void main() {
+    uint base = gl_GlobalInvocationID.x * stride_words;
+    dst_words[base + 0] = min(src_words[base + 0], max_count);
+    dst_words[base + 1] = min(src_words[base + 1], max_instances);
+    // firstIndex/firstVertex: past the real vertex buffer reads garbage, same as vertexOffset.
+    uint first = src_words[base + 2];
+    dst_words[base + 2] = first < max_vertices ? first : 0;
+    if (cmd_words == 5) {
+        uint vertex_offset = src_words[base + 3];
+        dst_words[base + 3] = vertex_offset < max_vertices ? vertex_offset : 0;
+        uint first_instance = src_words[base + 4];
+        dst_words[base + 4] = first_instance < max_first_instance ? first_instance : 0;
+    } else {
+        uint first_instance = src_words[base + 3];
+        dst_words[base + 3] = first_instance < max_first_instance ? first_instance : 0;
+    }
+}

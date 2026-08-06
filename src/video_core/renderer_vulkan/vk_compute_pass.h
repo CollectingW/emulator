@@ -107,13 +107,11 @@ public:
                                    StagingBufferPool& staging_buffer_pool_,
                                    ComputePassDescriptorQueue& compute_pass_descriptor_queue_);
 
-    /// Copies each indirect draw command from (buffer, offset) into a fresh scratch buffer,
-    /// clamping vertex/index count and instance count along the way. The source buffer is
-    /// left untouched -- it's backed by guest memory that other code later reads as real
-    /// command-stream/macro-parameter data, so clamping it in place would corrupt that data.
-    /// Returns the scratch buffer + offset the real indirect draw should read from instead.
+    /// Copies each indirect draw command into a fresh scratch buffer, clamping count, instance
+    /// count, firstIndex/firstVertex, vertexOffset, and firstInstance. Source buffer untouched
+    /// (it's guest memory read again elsewhere). max_vertices = real bound, e.g. GetMaxCurrentVertices().
     std::pair<VkBuffer, VkDeviceSize> Clamp(VkBuffer buffer, VkDeviceSize offset, u32 draw_count,
-                                            u32 stride, bool is_indexed);
+                                            u32 stride, bool is_indexed, u32 max_vertices);
 
 private:
     Scheduler& scheduler;

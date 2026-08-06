@@ -426,7 +426,8 @@ void RasterizerVulkan::DrawIndirect() {
             const auto& offset_base = count.second;
             const auto [clamped_buffer, clamped_offset] = indirect_draw_clamp_pass.Clamp(
                 buffer->Handle(), offset, static_cast<u32>(params.max_draw_counts),
-                static_cast<u32>(params.stride), params.is_indexed);
+                static_cast<u32>(params.stride), params.is_indexed,
+                maxwell3d->GetMaxCurrentVertices());
             // Clamp's compute dispatch closes the render pass PrepareDraw opened; reopen it.
             scheduler.RequestRenderpass(texture_cache.GetFramebuffer());
             scheduler.Record([this, draw_buffer_obj = draw_buffer->Handle(), clamped_buffer,
@@ -447,7 +448,8 @@ void RasterizerVulkan::DrawIndirect() {
         }
         const auto [clamped_buffer, clamped_offset] = indirect_draw_clamp_pass.Clamp(
             buffer->Handle(), offset, static_cast<u32>(params.max_draw_counts),
-            static_cast<u32>(params.stride), params.is_indexed);
+            static_cast<u32>(params.stride), params.is_indexed,
+            maxwell3d->GetMaxCurrentVertices());
         // Clamp's compute dispatch closes the render pass PrepareDraw opened; reopen it.
         scheduler.RequestRenderpass(texture_cache.GetFramebuffer());
         scheduler.Record([this, clamped_buffer, clamped_offset, params,

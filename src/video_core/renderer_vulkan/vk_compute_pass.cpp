@@ -483,16 +483,19 @@ IndirectDrawClampPass::IndirectDrawClampPass(
     ComputePassDescriptorQueue& compute_pass_descriptor_queue_)
     : ComputePass(device_, descriptor_pool_, INPUT_OUTPUT_DESCRIPTOR_SET_BINDINGS,
                   INPUT_OUTPUT_DESCRIPTOR_UPDATE_TEMPLATE, INPUT_OUTPUT_BANK_INFO,
-                  COMPUTE_PUSH_CONSTANT_RANGE<sizeof(u32) * 4>, INDIRECT_DRAW_CLAMP_COMP_SPV),
+                  COMPUTE_PUSH_CONSTANT_RANGE<sizeof(u32) * 6>, INDIRECT_DRAW_CLAMP_COMP_SPV),
       scheduler{scheduler_}, staging_buffer_pool{staging_buffer_pool_},
       compute_pass_descriptor_queue{compute_pass_descriptor_queue_} {}
 
 std::pair<VkBuffer, VkDeviceSize> IndirectDrawClampPass::Clamp(VkBuffer buffer,
                                                                 VkDeviceSize offset,
                                                                 u32 draw_count, u32 stride,
-                                                                bool is_indexed) {
+                                                                bool is_indexed,
+                                                                u32 max_vertices) {
     static constexpr u32 MaxVertexOrIndexCount = 200'000;
     static constexpr u32 MaxInstanceCount = 2'000;
+    // No real bound for firstInstance; flat ceiling like macro.cpp's base_instance clamps.
+    static constexpr u32 MaxFirstInstance = 100'000;
 
     // Vulkan only requires stride >= sizeof(VkDrawIndexedIndirectCommand) when drawCount > 1; for
     // drawCount == 1 (the common case) stride may legitimately be 0. A zero-size descriptor range
@@ -517,8 +520,8 @@ std::pair<VkBuffer, VkDeviceSize> IndirectDrawClampPass::Clamp(VkBuffer buffer,
     const void* const descriptor_data{compute_pass_descriptor_queue.UpdateData()};
 
     scheduler.RequestOutsideRenderPassOperationContext();
-    scheduler.Record([this, descriptor_data, draw_count, effective_stride,
-                      cmd_words](vk::CommandBuffer cmdbuf) {
+    scheduler.Record([this, descriptor_data, draw_count, effective_stride, cmd_words,
+                      max_vertices](vk::CommandBuffer cmdbuf) {
         static constexpr VkMemoryBarrier read_barrier{
             .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
             .pNext = nullptr,
@@ -531,9 +534,9 @@ std::pair<VkBuffer, VkDeviceSize> IndirectDrawClampPass::Clamp(VkBuffer buffer,
             .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
             .dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT,
         };
-        const std::array<u32, 4> push_constants{effective_stride / static_cast<u32>(sizeof(u32)),
+        const std::array<u32, 6> push_constants{effective_stride / static_cast<u32>(sizeof(u32)),
                                                 MaxVertexOrIndexCount, MaxInstanceCount,
-                                                cmd_words};
+                                                cmd_words, max_vertices, MaxFirstInstance};
         const VkDescriptorSet set = descriptor_allocator.Commit();
         device.GetLogical().UpdateDescriptorSet(set, *descriptor_template, descriptor_data);
 

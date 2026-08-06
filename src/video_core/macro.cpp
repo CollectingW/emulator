@@ -270,16 +270,13 @@ void HLE_DrawArraysIndirect::Fallback(Engines::Maxwell3D& maxwell3d, std::span<c
         }
     };
     maxwell3d.RefreshParameters();
-    // reg[0xD1B] is never written anywhere, so the old `GetRegisterValue(0xD1B) & parameters[2]`
-    // mask was always a no-op (0xFFFFFFFF). Mask explicitly instead.
-    const u32 instance_count = parameters[2] & 0xFFFF;
+    // Old bounds check only ran for unsafe topologies; Triangles/TriangleStrip skipped it. Clamp unconditionally instead.
+    static constexpr u32 MaxSaneInstanceCount = 512;
+    const u32 instance_count = std::min(parameters[2] & 0xFFFF, MaxSaneInstanceCount);
     auto topology = Maxwell3D::Regs::PrimitiveTopology(parameters[0]);
-    const u32 vertex_first = parameters[3];
-    const u32 vertex_count = parameters[1];
-    if (!IsTopologySafe(topology) && size_t(maxwell3d.GetMaxCurrentVertices()) < size_t(vertex_first) + size_t(vertex_count)) {
-        ASSERT(false && "Faulty draw!");
-        return;
-    }
+    const u32 max_vertices = maxwell3d.GetMaxCurrentVertices();
+    const u32 vertex_first = parameters[3] < max_vertices ? parameters[3] : 0;
+    const u32 vertex_count = std::min(parameters[1], max_vertices - vertex_first);
     const u32 base_instance = parameters[4];
     if (extended) {
         maxwell3d.regs.global_base_instance_index = base_instance;
@@ -306,7 +303,9 @@ void HLE_DrawIndexedIndirect::Execute(Engines::Maxwell3D& maxwell3d, std::span<c
     const u32 estimate = u32(maxwell3d.EstimateIndexBufferSize());
     // See Fallback()'s identical guard: base_vertex past the real vertex buffer reads garbage.
     const u32 element_base = parameters[4] < maxwell3d.GetMaxCurrentVertices() ? parameters[4] : 0;
-    const u32 base_instance = parameters[5];
+    // No reliable buffer-size bound exists for this like GetMaxCurrentVertices(); flat ceiling instead.
+    static constexpr u32 MaxSaneInstanceOffset = 100'000;
+    const u32 base_instance = parameters[5] < MaxSaneInstanceOffset ? parameters[5] : 0;
     maxwell3d.regs.vertex_id_base = element_base;
     maxwell3d.regs.global_base_vertex_index = element_base;
     maxwell3d.regs.global_base_instance_index = base_instance;
@@ -343,7 +342,9 @@ void HLE_DrawIndexedIndirect::Fallback(Engines::Maxwell3D& maxwell3d, std::span<
     // than the shared 2000 backstop since this macro's content doesn't need that many.
     static constexpr u32 MaxSaneInstanceCount = 512;
     const u32 instance_count = std::min(parameters[2] & 0xFFFF, MaxSaneInstanceCount);
-    const u32 base_instance = parameters[5];
+    // Same flat-ceiling guard as Execute() -- no buffer-size bound exists for this field.
+    static constexpr u32 MaxSaneInstanceOffset = 100'000;
+    const u32 base_instance = parameters[5] < MaxSaneInstanceOffset ? parameters[5] : 0;
     // parameters[1] (index count) and parameters[4] (base_vertex) have both been observed
     // wildly exceeding what's actually bound -- a base_vertex past the real vertex buffer
     // reads garbage position/normal/UV data, producing exploded-looking black geometry.
@@ -514,10 +515,7 @@ void HLE_BindShader::Execute(Engines::Maxwell3D& maxwell3d, std::span<const u32>
     maxwell3d.RefreshParameters();
     auto& regs = maxwell3d.regs;
     const u32 index = parameters[0];
-    if ((parameters[1] - regs.shadow_scratch[28 + index]) == 0) {
-        return;
-    }
-
+    // parameters[1] can be garbage; a false "unchanged" match used to skip the bind and Dirty::Shaders. Always bind.
     regs.pipelines[index & 0xF].offset = parameters[2];
     maxwell3d.dirty.flags[VideoCommon::Dirty::Shaders] = true;
     regs.shadow_scratch[28 + index] = parameters[1];
