@@ -1507,9 +1507,9 @@ rebuild_ffmpeg_pthread_free() {
         ffmpeg_bld="${_ffmpeg_safe_root}/bld"
         rm -rf "${ffmpeg_src_dir}" "${ffmpeg_bld}"
     fi
-    local ffmpeg_global_cache="${CPM_SOURCE_CACHE}/citron-ffmpeg-static/${FFMPEG_VERSION}-llvm-mingw"
-
-    local sentinel="${ffmpeg_lib}/.llvm_static_built"
+    local ffmpeg_global_cache="${CPM_SOURCE_CACHE}/citron-ffmpeg-static/${FFMPEG_VERSION}-v2vulkan-llvm-mingw"
+    local sentinel_name=".llvm_static_built_v2vulkan"
+    local sentinel="${ffmpeg_lib}/${sentinel_name}"
 
     # 1. Check if it's already in the local build dir
     if [[ -f "${sentinel}" ]]; then
@@ -1518,7 +1518,7 @@ rebuild_ffmpeg_pthread_free() {
     fi
 
     # 2. Check if it's in the global cache
-    if [[ -f "${ffmpeg_global_cache}/lib/.llvm_static_built" ]]; then
+    if [[ -f "${ffmpeg_global_cache}/lib/${sentinel_name}" ]]; then
         info "[ffmpeg-rebuild] Found pre-built FFmpeg in global cache: ${ffmpeg_global_cache}"
         info "[ffmpeg-rebuild] Copying cached libs to ${ffmpeg_ext_dir}..."
         mkdir -p "${ffmpeg_ext_dir}"

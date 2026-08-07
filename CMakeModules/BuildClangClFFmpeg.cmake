@@ -70,19 +70,19 @@ function(citron_build_clangcl_ffmpeg)
         set(_ffmpeg_extra_cflags "${_ffmpeg_extra_cflags} ${CLANGCL_FFMPEG_EXTRA_CFLAGS}")
     endif()
 
-    # Flag sentinel: if cached build's flags differ from current, remove stamp so ninja rebuilds.
-    # CLANGCL_FFMPEG_CACHE_DIR path-keying is the primary protection; this is a fallback.
+    # Flag sentinel: if recorded configure flags/command differ from current, remove stamp so ninja rebuilds.
     set(_ffmpeg_flags_sentinel "${_install_dir}/.citron-clangcl-extra-cflags")
     set(_ffmpeg_flags_sentinel_content "")
+    set(_current_sentinel_hash "${_ffmpeg_configure_command} ${_ffmpeg_extra_cflags}")
     if (EXISTS "${_ffmpeg_flags_sentinel}")
         file(READ "${_ffmpeg_flags_sentinel}" _ffmpeg_flags_sentinel_content)
         string(STRIP "${_ffmpeg_flags_sentinel_content}" _ffmpeg_flags_sentinel_content)
     endif()
-    if (EXISTS "${_build_stamp}" AND NOT _ffmpeg_flags_sentinel_content STREQUAL "${_ffmpeg_extra_cflags}")
-        message(STATUS "[FFmpeg/clang-cl] Cached build's recorded flags don't match the current build's; rebuilding")
+    if (EXISTS "${_build_stamp}" AND NOT _ffmpeg_flags_sentinel_content STREQUAL "${_current_sentinel_hash}")
+        message(STATUS "[FFmpeg/clang-cl] Configure flags changed; invalidating cache and rebuilding FFmpeg")
         file(REMOVE "${_build_stamp}")
     endif()
-    file(WRITE "${_ffmpeg_flags_sentinel}" "${_ffmpeg_extra_cflags}")
+    file(WRITE "${_ffmpeg_flags_sentinel}" "${_current_sentinel_hash}")
 
     set(_ffmpeg_configure_command
         "export PATH='${_clangcl_tool_dir_msys}:${_linker_tool_dir_msys}:${_ar_tool_dir_msys}':$PATH &&"

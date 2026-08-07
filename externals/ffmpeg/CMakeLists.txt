@@ -186,6 +186,19 @@ if (NOT WIN32 AND NOT ANDROID)
     # `--disable-vdpau` is needed to avoid linking issues
     set(FFmpeg_CC ${CMAKE_C_COMPILER_LAUNCHER}  ${CMAKE_C_COMPILER})
     set(FFmpeg_CXX ${CMAKE_CXX_COMPILER_LAUNCHER}  ${CMAKE_CXX_COMPILER})
+
+    # Invalidate existing Makefile if configure flags changed (e.g. adding Vulkan hwaccel)
+    set(FFmpeg_SENTINEL_FILE "${FFmpeg_BUILD_DIR}/.citron_ffmpeg_configure_flags")
+    set(FFmpeg_CURRENT_FLAGS "${FFmpeg_HWACCEL_FLAGS}")
+    if (EXISTS "${FFmpeg_SENTINEL_FILE}")
+        file(READ "${FFmpeg_SENTINEL_FILE}" FFmpeg_CACHED_FLAGS)
+        string(STRIP "${FFmpeg_CACHED_FLAGS}" FFmpeg_CACHED_FLAGS)
+        if (NOT FFmpeg_CACHED_FLAGS STREQUAL "${FFmpeg_CURRENT_FLAGS}")
+            message(STATUS "[FFmpeg] Hardware accel configure flags changed; invalidating Makefile")
+            file(REMOVE "${FFmpeg_MAKEFILE}")
+        endif()
+    endif()
+    file(WRITE "${FFmpeg_SENTINEL_FILE}" "${FFmpeg_CURRENT_FLAGS}")
     add_custom_command(
         OUTPUT
             ${FFmpeg_MAKEFILE}
