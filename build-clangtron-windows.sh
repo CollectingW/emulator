@@ -1269,16 +1269,16 @@ COMSUPP_CPP_EOF
         cp "${stub_obj}" "${_safe_obj}" \
             || error "Failed to copy comsupp_stubs.o to space-free path ${_safe_obj}"
         if [[ "${_HOST_OS}" == "windows" ]]; then
-            _COMSUPP_TC_PATH="$(cygpath -m "${_safe_obj}")"
+            _COMSUPP_TC_PATH="$(cygpath -am "${_safe_obj}")"
         else
-            _COMSUPP_TC_PATH="${_safe_obj}"
+            _COMSUPP_TC_PATH="$(realpath -m "${_safe_obj}")"
         fi
         info "comsupp_stubs.o staged to space-free path: ${_COMSUPP_TC_PATH}"
     else
         if [[ "${_HOST_OS}" == "windows" ]]; then
-            _COMSUPP_TC_PATH="$(cygpath -m "${stub_obj}")"
+            _COMSUPP_TC_PATH="$(cygpath -am "${stub_obj}")"
         else
-            _COMSUPP_TC_PATH="${stub_obj}"
+            _COMSUPP_TC_PATH="$(realpath -m "${stub_obj}")"
         fi
     fi
 }

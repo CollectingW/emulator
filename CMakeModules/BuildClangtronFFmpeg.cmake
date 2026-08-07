@@ -124,7 +124,7 @@ function(citron_build_clangtron_ffmpeg)
         "--enable-d3d11va"
     )
 
-    if(CMAKE_CROSSCOMPILING)
+    if(NOT CMAKE_HOST_WIN32)
         list(APPEND _ffmpeg_configure_command "--enable-cross-compile" "--cross-prefix=${_clangtron_tool_dir_msys}/x86_64-w64-mingw32-")
     else()
         list(APPEND _ffmpeg_configure_command "--host-cc='${_c_compiler_win}'")
@@ -145,12 +145,9 @@ function(citron_build_clangtron_ffmpeg)
             "${_install_dir}/lib/libavcodec.a"
             "${_install_dir}/lib/libavutil.a"
             "${_install_dir}/lib/libavformat.a"
-        COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
-            "${BASH_PROGRAM}" -lc "${_ffmpeg_configure_command}"
-        COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
-            "${BASH_PROGRAM}" -lc "export PATH='${_clangtron_tool_dir_msys}':$PATH && '${MAKE_PROGRAM}' -j${_ffmpeg_jobs}"
-        COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
-            "${BASH_PROGRAM}" -lc "export PATH='${_clangtron_tool_dir_msys}':$PATH && '${MAKE_PROGRAM}' install"
+        COMMAND "${BASH_PROGRAM}" -lc "${_ffmpeg_configure_command}"
+        COMMAND "${BASH_PROGRAM}" -lc "export PATH='${_clangtron_tool_dir_msys}':$PATH && '${MAKE_PROGRAM}' -j${_ffmpeg_jobs}"
+        COMMAND "${BASH_PROGRAM}" -lc "export PATH='${_clangtron_tool_dir_msys}':$PATH && '${MAKE_PROGRAM}' install"
         COMMAND "${CMAKE_COMMAND}" -E touch "${_build_stamp}"
         DEPENDS "${CMAKE_CURRENT_LIST_FILE}" "${_source_dir}/configure"
         WORKING_DIRECTORY "${_build_dir_win}"
