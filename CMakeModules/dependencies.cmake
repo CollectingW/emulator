@@ -237,21 +237,11 @@ endif()
 option(CITRON_USE_VULKAN_STUB "Use pre-generated Vulkan stub instead of fetching Vulkan-Headers" ON)
 
 if (CITRON_USE_EXTERNAL_VULKAN_HEADERS AND NOT TARGET Vulkan::Headers)
-    if (CITRON_USE_VULKAN_STUB AND
-        NOT CITRON_USE_EXTERNAL_VULKAN_UTILITY_LIBRARIES AND
-        EXISTS "${CMAKE_SOURCE_DIR}/externals/vulkan-stub/include")
-        add_library(Vulkan-Headers INTERFACE)
-        target_include_directories(Vulkan-Headers SYSTEM INTERFACE
-            "${CMAKE_SOURCE_DIR}/externals/vulkan-stub/include")
-        target_compile_definitions(Vulkan-Headers INTERFACE VK_ENABLE_BETA_EXTENSIONS)
-        add_library(Vulkan::Headers ALIAS Vulkan-Headers)
-    else()
-        CPMAddPackage(
-            NAME Vulkan-Headers
-            GITHUB_REPOSITORY KhronosGroup/Vulkan-Headers
-            GIT_TAG v1.4.337
-        )
-    endif()
+    CPMAddPackage(
+        NAME Vulkan-Headers
+        GITHUB_REPOSITORY KhronosGroup/Vulkan-Headers
+        GIT_TAG v1.4.337
+    )
 endif()
 
 # ── Vulkan-Utility-Libraries ──────────────────────────────────────────────────

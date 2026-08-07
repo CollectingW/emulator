@@ -307,6 +307,9 @@ elseif(WIN32)
     if(CITRON_CLANGCL)
         include(BuildClangClFFmpeg)
         citron_build_clangcl_ffmpeg()
+    elseif(CITRON_CLANGTRON)
+        include(BuildClangtronFFmpeg)
+        citron_build_clangtron_ffmpeg()
     elseif(MSVC)
         # ── MSVC / vcpkg path ─────────────────────────────────────────────────
         # FFmpeg is built and installed by vcpkg (guarded by "!mingw & windows"

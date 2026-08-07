@@ -45,7 +45,7 @@ function(citron_build_clangcl_ffmpeg)
     get_filename_component(_ar_tool_dir "${CMAKE_AR}" DIRECTORY)
     execute_process(
         COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
-            "${BASH_PROGRAM}" -lc "(_winpath() { cygpath -dos \"\$1\" 2>/dev/null || cygpath -am \"\$1\"; }; _winpath '${_source_dir}' && _winpath '${_build_dir}' && _winpath '${_install_dir}' && cygpath -au '${_clangcl_tool_dir}' && cygpath -au '${_linker_tool_dir}' && cygpath -au '${_ar_tool_dir}' && cygpath -au '${_install_dir}' && cygpath -au '${_source_dir}' && cygpath -au '${_build_dir}')"
+            "${BASH_PROGRAM}" -lc "(_winpath() { cygpath -dos \"$1\" 2>/dev/null || cygpath -am \"$1\"; }; _winpath '${_source_dir}' && _winpath '${_build_dir}' && _winpath '${_install_dir}' && cygpath -au '${_clangcl_tool_dir}' && cygpath -au '${_linker_tool_dir}' && cygpath -au '${_ar_tool_dir}' && cygpath -au '${_install_dir}' && cygpath -au '${_source_dir}' && cygpath -au '${_build_dir}')"
         OUTPUT_VARIABLE _clangcl_ffmpeg_paths
         OUTPUT_STRIP_TRAILING_WHITESPACE
         COMMAND_ERROR_IS_FATAL ANY
@@ -70,19 +70,45 @@ function(citron_build_clangcl_ffmpeg)
         set(_ffmpeg_extra_cflags "${_ffmpeg_extra_cflags} ${CLANGCL_FFMPEG_EXTRA_CFLAGS}")
     endif()
 
-    # Flag sentinel: if recorded configure flags/command differ from current, remove stamp so ninja rebuilds.
-    set(_ffmpeg_flags_sentinel "${_install_dir}/.citron-clangcl-extra-cflags")
-    set(_ffmpeg_flags_sentinel_content "")
-    set(_current_sentinel_hash "${_ffmpeg_configure_command} ${_ffmpeg_extra_cflags}")
-    if (EXISTS "${_ffmpeg_flags_sentinel}")
-        file(READ "${_ffmpeg_flags_sentinel}" _ffmpeg_flags_sentinel_content)
-        string(STRIP "${_ffmpeg_flags_sentinel_content}" _ffmpeg_flags_sentinel_content)
+    # ── Vulkan headers detection ───────────────────────────────────────────────
+    # Resolution order (most authoritative first):
+    #   1. CPM Vulkan-Headers_SOURCE_DIR (set by dependencies.cmake via CPMAddPackage)
+    #   2. MSYS2 system headers ($MSYSTEM_PREFIX/include)
+    # We intentionally do NOT use get_target_property(Vulkan::Headers ...) because
+    # INTERFACE_INCLUDE_DIRECTORIES may contain generator expressions that cannot
+    # be resolved at configure-time for an external shell command.
+    set(_vk_inc_dir "")
+    if (DEFINED Vulkan-Headers_SOURCE_DIR AND EXISTS "${Vulkan-Headers_SOURCE_DIR}/include/vulkan/vulkan.h")
+        set(_vk_inc_dir "${Vulkan-Headers_SOURCE_DIR}/include")
+    elseif (DEFINED Vulkan_Headers_SOURCE_DIR AND EXISTS "${Vulkan_Headers_SOURCE_DIR}/include/vulkan/vulkan.h")
+        # CPM normalises hyphens to underscores in some versions
+        set(_vk_inc_dir "${Vulkan_Headers_SOURCE_DIR}/include")
+    elseif (EXISTS "$ENV{MSYSTEM_PREFIX}/include/vulkan/vulkan.h")
+        set(_vk_inc_dir "$ENV{MSYSTEM_PREFIX}/include")
     endif()
-    if (EXISTS "${_build_stamp}" AND NOT _ffmpeg_flags_sentinel_content STREQUAL "${_current_sentinel_hash}")
-        message(STATUS "[FFmpeg/clang-cl] Configure flags changed; invalidating cache and rebuilding FFmpeg")
-        file(REMOVE "${_build_stamp}")
+
+    set(_ffmpeg_vulkan_flags "")
+    if (_vk_inc_dir)
+        message(STATUS "[FFmpeg/clang-cl] Vulkan headers found at: ${_vk_inc_dir}")
+        # Convert to a Windows-compatible path that clang-cl and FFmpeg's configure can use.
+        execute_process(
+            COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
+                "${BASH_PROGRAM}" -lc "cygpath -am '${_vk_inc_dir}'"
+            OUTPUT_VARIABLE _vk_inc_win
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if (_vk_inc_win)
+            set(_ffmpeg_extra_cflags "${_ffmpeg_extra_cflags} -I${_vk_inc_win}")
+        endif()
+        set(_ffmpeg_vulkan_flags
+            "--enable-vulkan"
+            "--enable-hwaccel=h264_vulkan"
+            "--enable-hwaccel=vp9_vulkan"
+        )
+    else()
+        message(STATUS "[FFmpeg/clang-cl] Vulkan headers not found; disabling Vulkan hwaccel")
+        set(_ffmpeg_vulkan_flags "--disable-vulkan")
     endif()
-    file(WRITE "${_ffmpeg_flags_sentinel}" "${_current_sentinel_hash}")
 
     set(_ffmpeg_configure_command
         "export PATH='${_clangcl_tool_dir_msys}:${_linker_tool_dir_msys}:${_ar_tool_dir_msys}':$PATH &&"
@@ -118,14 +144,26 @@ function(citron_build_clangcl_ffmpeg)
         "--enable-hwaccel=vp9_dxva2"
         "--enable-hwaccel=vp9_d3d11va"
         "--enable-hwaccel=vp9_d3d11va2"
-        "--enable-vulkan"
-        "--enable-hwaccel=h264_vulkan"
-        "--enable-hwaccel=vp9_vulkan"
+        ${_ffmpeg_vulkan_flags}
         "--enable-filter=yadif,scale"
         "--enable-dxva2"
         "--enable-d3d11va"
         "--extra-cflags='${_ffmpeg_extra_cflags}'")
     string(JOIN " " _ffmpeg_configure_command ${_ffmpeg_configure_command})
+
+    # Flag sentinel: if recorded configure flags/command differ from current, remove stamp so ninja rebuilds.
+    set(_ffmpeg_flags_sentinel "${_install_dir}/.citron-clangcl-extra-cflags")
+    set(_ffmpeg_flags_sentinel_content "")
+    set(_current_sentinel_hash "${_ffmpeg_configure_command} ${_ffmpeg_extra_cflags}")
+    if (EXISTS "${_ffmpeg_flags_sentinel}")
+        file(READ "${_ffmpeg_flags_sentinel}" _ffmpeg_flags_sentinel_content)
+        string(STRIP "${_ffmpeg_flags_sentinel_content}" _ffmpeg_flags_sentinel_content)
+    endif()
+    if (EXISTS "${_build_stamp}" AND NOT _ffmpeg_flags_sentinel_content STREQUAL "${_current_sentinel_hash}")
+        message(STATUS "[FFmpeg/clang-cl] Configure flags changed; invalidating cache and rebuilding FFmpeg")
+        file(REMOVE "${_build_stamp}")
+    endif()
+    file(WRITE "${_ffmpeg_flags_sentinel}" "${_current_sentinel_hash}")
 
     add_custom_command(
         OUTPUT "${_build_stamp}"
