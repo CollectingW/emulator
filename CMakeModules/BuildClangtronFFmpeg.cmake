@@ -37,42 +37,56 @@ function(citron_build_clangtron_ffmpeg)
     
     get_filename_component(_clangtron_tool_dir "${CMAKE_C_COMPILER}" DIRECTORY)
     
-    execute_process(
-        COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
-            "${BASH_PROGRAM}" -lc "cygpath -am '${_source_dir}' && cygpath -am '${_build_dir}' && cygpath -am '${_install_dir}' && cygpath -au '${_clangtron_tool_dir}' && cygpath -am '${CMAKE_C_COMPILER}' && cygpath -am '${CMAKE_RC_COMPILER}'"
-        OUTPUT_VARIABLE _clangtron_ffmpeg_paths
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        COMMAND_ERROR_IS_FATAL ANY
-    )
-    string(REPLACE "\n" ";" _clangtron_ffmpeg_paths "${_clangtron_ffmpeg_paths}")
-    list(GET _clangtron_ffmpeg_paths 0 _source_dir_win)
-    list(GET _clangtron_ffmpeg_paths 1 _build_dir_win)
-    list(GET _clangtron_ffmpeg_paths 2 _install_dir_win)
-    list(GET _clangtron_ffmpeg_paths 3 _clangtron_tool_dir_msys)
-    list(GET _clangtron_ffmpeg_paths 4 _c_compiler_win)
-    list(GET _clangtron_ffmpeg_paths 5 _rc_compiler_win)
+    if(CMAKE_HOST_WIN32)
+        execute_process(
+            COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
+                "${BASH_PROGRAM}" -lc "cygpath -am '${_source_dir}' && cygpath -am '${_build_dir}' && cygpath -am '${_install_dir}' && cygpath -au '${_clangtron_tool_dir}' && cygpath -am '${CMAKE_C_COMPILER}' && cygpath -am '${CMAKE_RC_COMPILER}'"
+            OUTPUT_VARIABLE _clangtron_ffmpeg_paths
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            COMMAND_ERROR_IS_FATAL ANY
+        )
+        string(REPLACE "\n" ";" _clangtron_ffmpeg_paths "${_clangtron_ffmpeg_paths}")
+        list(GET _clangtron_ffmpeg_paths 0 _source_dir_win)
+        list(GET _clangtron_ffmpeg_paths 1 _build_dir_win)
+        list(GET _clangtron_ffmpeg_paths 2 _install_dir_win)
+        list(GET _clangtron_ffmpeg_paths 3 _clangtron_tool_dir_msys)
+        list(GET _clangtron_ffmpeg_paths 4 _c_compiler_win)
+        list(GET _clangtron_ffmpeg_paths 5 _rc_compiler_win)
 
-    # MSYS paths for bash commands (cd, mv) — separate from Windows mixed paths
-    execute_process(
-        COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
-            "${BASH_PROGRAM}" -lc "cygpath -au '${_install_dir}'"
-        OUTPUT_VARIABLE _install_dir_msys
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        COMMAND_ERROR_IS_FATAL ANY
-    )
+        # MSYS paths for bash commands (cd, mv) — separate from Windows mixed paths
+        execute_process(
+            COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
+                "${BASH_PROGRAM}" -lc "cygpath -au '${_install_dir}'"
+            OUTPUT_VARIABLE _install_dir_msys
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            COMMAND_ERROR_IS_FATAL ANY
+        )
+    else()
+        set(_source_dir_win "${_source_dir}")
+        set(_build_dir_win "${_build_dir}")
+        set(_install_dir_win "${_install_dir}")
+        set(_clangtron_tool_dir_msys "${_clangtron_tool_dir}")
+        set(_c_compiler_win "${CMAKE_C_COMPILER}")
+        set(_rc_compiler_win "${CMAKE_RC_COMPILER}")
+        set(_install_dir_msys "${_install_dir}")
+    endif()
 
     set(_build_stamp "${_install_dir}/.built")
     file(MAKE_DIRECTORY "${_build_dir}" "${_install_dir}")
 
     set(_ffmpeg_extra_cflags "")
     if (Vulkan-Headers_SOURCE_DIR)
-        execute_process(
-            COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
-                "${BASH_PROGRAM}" -lc "cygpath -am '${Vulkan-Headers_SOURCE_DIR}'"
-            OUTPUT_VARIABLE _vk_headers_win
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            COMMAND_ERROR_IS_FATAL ANY
-        )
+        if(CMAKE_HOST_WIN32)
+            execute_process(
+                COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
+                    "${BASH_PROGRAM}" -lc "cygpath -am '${Vulkan-Headers_SOURCE_DIR}'"
+                OUTPUT_VARIABLE _vk_headers_win
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                COMMAND_ERROR_IS_FATAL ANY
+            )
+        else()
+            set(_vk_headers_win "${Vulkan-Headers_SOURCE_DIR}")
+        endif()
         set(_ffmpeg_extra_cflags "${_ffmpeg_extra_cflags} -I${_vk_headers_win}/include")
     endif()
 
