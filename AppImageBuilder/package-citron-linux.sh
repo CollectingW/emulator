@@ -115,30 +115,13 @@ chmod +x quick-sharun
 # Bundle binary + runtime libs that are dlopen'd rather than linked, so
 # quick-sharun's static ldd scan can't find them on its own. Located via
 # `ldconfig -p` instead of a hardcoded /usr/lib*/*.so glob because multiarch
-# systems (Debian/Ubuntu) keep them under /usr/lib/<triplet>/. All are
-# best-effort: a glob matching nothing would otherwise pass quick-sharun a
-# literal nonexistent path (POSIX sh has no nullglob) and it would abort.
+# systems (Debian/Ubuntu) keep them under /usr/lib/<triplet>/.
+# (Note: quick-sharun already handles libpulse via binary-string scanning and
+# libwayland-client via DEPLOY_COMMON_LIBS).
 EXTRA_LIBS=""
 
 GAMEMODE_LIB="$(ldconfig -p 2>/dev/null | awk '/libgamemode\.so/ {print $NF; exit}')"
 [ -n "$GAMEMODE_LIB" ] && EXTRA_LIBS="$EXTRA_LIBS $GAMEMODE_LIB"
-
-PULSE_LIB="$(ldconfig -p 2>/dev/null | awk '/libpulse\.so/ {print $NF; exit}')"
-if [ -n "$PULSE_LIB" ]; then
-    EXTRA_LIBS="$EXTRA_LIBS $PULSE_LIB"
-    _pulse_dir="$(dirname "$PULSE_LIB")"
-    PULSECOMMON_LIB="$(find "$_pulse_dir" "${_pulse_dir}/pulseaudio" -maxdepth 1 -name 'libpulsecommon-*.so' 2>/dev/null | head -1)"
-    [ -n "$PULSECOMMON_LIB" ] && EXTRA_LIBS="$EXTRA_LIBS $PULSECOMMON_LIB"
-fi
-
-# The bundled Vulkan loader has Wayland entry points compiled in (confirmed
-# via nm -D: vkCreateWaylandSurfaceKHR, vkGetPhysicalDeviceWaylandPresent-
-# ationSupportKHR) but dlopen()s libwayland-client.so.0 for them rather than
-# linking it directly — invisible to the static ldd scan. Without it,
-# VK_KHR_wayland_surface reports unavailable even though the loader supports
-# it.
-WAYLAND_CLIENT_LIB="$(ldconfig -p 2>/dev/null | awk '/libwayland-client\.so/ {print $NF; exit}')"
-[ -n "$WAYLAND_CLIENT_LIB" ] && EXTRA_LIBS="$EXTRA_LIBS $WAYLAND_CLIENT_LIB"
 
 # shellcheck disable=SC2086
 ./quick-sharun "${DESTDIR}/usr/bin/citron"* $EXTRA_LIBS
@@ -209,10 +192,8 @@ fi
 # that works on the build machine but not anywhere else without an explicit
 # qt.conf overriding it. Qt looks for qt.conf next to the running
 # executable — sharun relocates the real citron binary to
-# AppDir/shared/bin/citron (AppDir/bin/citron is a thin exec wrapper, not
-# what Qt sees as its own executable path at runtime), so qt.conf has to live
-# there, not next to libQt6Core.so.6. Also clobbers any qt.conf that lib4bin
-# staged from the CPM install itself, so no build-machine path can leak in.
+# AppDir/shared/bin/citron — that is what Qt sees as its own executable path
+# at runtime, so qt.conf goes there.
 mkdir -p ./AppDir/shared/bin
 cat > ./AppDir/shared/bin/qt.conf << 'QTCONF_EOF'
 [Paths]
@@ -245,6 +226,17 @@ cat <<-'HOOK_EOF' > ./AppDir/bin/01-llvm-profile.hook
 #!/bin/sh
 export LLVM_PROFILE_FILE="$(dirname "$APPIMAGE")/default-%p.profraw"
 HOOK_EOF
+chmod +x ./AppDir/bin/01-llvm-profile.hook
+
+# Direct libva to search host system driver paths for hardware VAAPI video decoding,
+# enabling hardware acceleration on all distros without bundling Mesa OpenGL/Gallium/LLVM bloat.
+cat <<-'HOOK_EOF' > ./AppDir/bin/02-vaapi.hook
+#!/bin/sh
+if [ -z "${LIBVA_DRIVERS_PATH:-}" ]; then
+    export LIBVA_DRIVERS_PATH="/usr/lib64/dri:/usr/lib/x86_64-linux-gnu/dri:/usr/lib/dri"
+fi
+HOOK_EOF
+chmod +x ./AppDir/bin/02-vaapi.hook
 
 # Build the AppImage
 ./quick-sharun --make-appimage
