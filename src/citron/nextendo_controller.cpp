@@ -6,6 +6,7 @@
 
 #include <QByteArray>
 #include <QDesktopServices>
+#include <QProcess>
 #include <QUrl>
 
 #include <fmt/format.h>
@@ -18,7 +19,9 @@
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/vfs/vfs.h"
 #include "core/hle/service/acc/profile_manager.h"
+#include "citron/nextendo_compatible_titles.h"
 #include "citron/nextendo_controller.h"
+#include "citron/nextendo_save_sync.h"
 
 #ifdef ENABLE_WEB_SERVICE
 #include "web_service/nextendo_api.h"
@@ -115,7 +118,21 @@ void NextendoController::SignIn() {
     std::thread{[this] {
         const auto open_url = [this](const std::string& url) {
             QMetaObject::invokeMethod(
-                this, [url] { QDesktopServices::openUrl(QUrl(QString::fromStdString(url))); },
+                this,
+                [url] {
+#ifdef __linux__
+                    // xdg-desktop-portal can report success without a browser ever appearing.
+                    qint64 pid = -1;
+                    const bool ok = QProcess::startDetached(
+                        QStringLiteral("xdg-open"), {QString::fromStdString(url)}, QString(), &pid);
+                    LOG_INFO(Frontend, "NextendoController::SignIn: xdg-open -> ok={} pid={}", ok,
+                             pid);
+#else
+                    const bool ok = QDesktopServices::openUrl(QUrl(QString::fromStdString(url)));
+                    LOG_INFO(Frontend, "NextendoController::SignIn: QDesktopServices::openUrl -> {}",
+                             ok);
+#endif
+                },
                 Qt::QueuedConnection);
         };
 
@@ -149,6 +166,24 @@ void NextendoController::SignOut() {
     Common::NextendoFriends::Set({});
     last_known_status.clear();
     emit AccountUnlinked();
+}
+
+void NextendoController::ManualSaveDownload(u64 title_id) {
+#ifdef ENABLE_WEB_SERVICE
+    if (!Nextendo::CompatibleTitles::Table().count(title_id)) {
+        emit StatusChanged(tr("This game doesn't support cloud saves."));
+        return;
+    }
+
+    emit StatusChanged(tr("Downloading save from the cloud..."));
+    std::thread{[this, title_id] {
+        Nextendo::SaveSync::Pull(system, title_id, /*force=*/true);
+        QMetaObject::invokeMethod(
+            this, [this] { emit StatusChanged(tr("Cloud save applied.")); }, Qt::QueuedConnection);
+    }}.detach();
+#else
+    emit StatusChanged(tr("This build has no web services support."));
+#endif
 }
 
 void NextendoController::ApplyProfileName(const std::string& name) {

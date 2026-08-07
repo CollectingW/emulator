@@ -276,6 +276,8 @@ add_executable(citron
     nextendo_network_probe.h
     nextendo_online_counts.cpp
     nextendo_online_counts.h
+    nextendo_save_sync.cpp
+    nextendo_save_sync.h
     nextendo_toast.cpp
     nextendo_toast.h
     precompiled_headers.h

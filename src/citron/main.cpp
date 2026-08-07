@@ -157,6 +157,7 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "citron/nextendo_account_dialog.h"
 #include "citron/nextendo_controller.h"
 #include "citron/nextendo_online_counts.h"
+#include "citron/nextendo_save_sync.h"
 #include "citron/nextendo_toast.h"
 #include "citron/play_time_manager.h"
 #include "common/nextendo_account.h"
@@ -486,6 +487,26 @@ GMainWindow::GMainWindow(std::unique_ptr<QtConfig> config_, bool has_broken_vulk
 
     game_list->LoadCompatibilityList();
     game_list->PopulateAsync(UISettings::values.game_dirs);
+
+#ifdef ENABLE_WEB_SERVICE
+    // The content provider isn't populated with installed titles yet at this point in boot, so
+    // there's nothing reliable to check "is Splatoon 2 installed" against here. Just attempt it
+    // for the 3 known title IDs; NextendoByamlInstalled/Skipped still make this a true no-op after
+    // the first successful run or a decline.
+    if (!has_performed_bcat_autodownload) {
+        has_performed_bcat_autodownload = true;
+        static constexpr std::array<u64, 3> kByamlTitles{
+            0x0100f8f0000a2000ULL, 0x01003bc0000a0000ULL, 0x01003c700009c800ULL,
+        };
+        for (const u64 title_id : kByamlTitles) {
+            if (!NextendoByamlInstalled(title_id) && !NextendoByamlSkipped(title_id)) {
+                LOG_INFO(Frontend, "Nextendo BCAT: auto-downloading schedule for {:016X}",
+                         title_id);
+                SilentlyDownloadNextendoByaml(title_id);
+            }
+        }
+    }
+#endif
 
     // make sure menubar has the arrow cursor instead of inheriting from this
     ui->menubar->setCursor(QCursor());
@@ -1954,8 +1975,7 @@ void GMainWindow::ConnectMenuEvents() {
 
     connect(ui->action_Nextendo_Open_Account, &QAction::triggered, this, [this] {
         if (!Common::NextendoAccount::IsLinked()) {
-            QMessageBox::information(this, tr("Nextendo Account"),
-                                     tr("Sign in to your Nextendo account first."));
+            nextendo_controller->SignIn();
             return;
         }
         NextendoAccountDialog(nextendo_controller, this).exec();
@@ -2407,6 +2427,7 @@ void GMainWindow::BootGame(const QString& filename, Service::AM::FrontendAppletP
     current_title_id = title_id; // Store ID safely
 
     OfferNextendoByamlDownload(title_id);
+    Nextendo::SaveSync::Pull(*system, title_id);
 
     if (type == StartGameType::Normal) {
         // Load per game settings if it is a normal boot
@@ -2650,6 +2671,19 @@ void GMainWindow::OnEmulationStopped() {
 
     // This is necessary to reset the in-memory state for the next launch.
     system->GetFileSystemController().InitializeContentSystem(*vfs, true);
+
+#ifdef ENABLE_WEB_SERVICE
+    // Only safe past this point: emu_thread has fully exited (no more concurrent guest access to
+    // the VFS) and InitializeContentSystem() just rebuilt a fresh save-data factory.
+    {
+        auto save_zip = Nextendo::SaveSync::CaptureForPush(*system, current_title_id);
+        if (!save_zip.empty()) {
+            std::thread{[title_id = current_title_id, zip = std::move(save_zip)]() mutable {
+                Nextendo::SaveSync::UploadCaptured(title_id, std::move(zip));
+            }}.detach();
+        }
+    }
+#endif
 
     // Refresh the game list now that the filesystem is valid again.
     game_list->ClearLaunchOverlays();
@@ -7216,6 +7250,19 @@ void GMainWindow::RunNextendoByamlDownloadWithProgress(u64 title_id) {
 void GMainWindow::NextendoByamlDownloadFromMenu(u64 title_id) {
 #ifdef ENABLE_WEB_SERVICE
     RunNextendoByamlDownloadWithProgress(title_id);
+#endif
+}
+
+void GMainWindow::SilentlyDownloadNextendoByaml(u64 title_id) {
+#ifdef ENABLE_WEB_SERVICE
+    std::thread{[this, title_id] {
+        const bool ok = NextendoByamlDownload(title_id);
+        if (ok) {
+            LOG_INFO(Frontend, "Nextendo BCAT: auto-download succeeded for {:016X}", title_id);
+        } else {
+            LOG_ERROR(Frontend, "Nextendo BCAT: auto-download failed for {:016X}", title_id);
+        }
+    }}.detach();
 #endif
 }
 
