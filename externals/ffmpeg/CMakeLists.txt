@@ -135,6 +135,33 @@ if (NOT WIN32 AND NOT ANDROID)
         list(APPEND FFmpeg_HWACCEL_FLAGS --disable-vdpau)
     endif()
 
+    # Vulkan hwaccel — covers AMD (RADV), Intel (ANV), and NVIDIA (555+).
+    # Requires glslang or shaderc for SPIR-V shader compilation at decode time.
+    # AV_HWDEVICE_TYPE_VULKAN is already last in citron's PreferredGpuDecoders
+    # so this is only used if CUDA/VAAPI/VDPAU all fail or are absent.
+    find_package(Vulkan QUIET)
+    find_program(GLSLANG_PROGRAM NAMES glslang glslangValidator)
+    pkg_check_modules(SHADERC shaderc QUIET)
+    if (Vulkan_FOUND AND (GLSLANG_PROGRAM OR SHADERC_FOUND))
+        list(APPEND FFmpeg_HWACCEL_FLAGS
+            --enable-vulkan
+            --enable-hwaccel=h264_vulkan
+            --enable-hwaccel=vp9_vulkan
+        )
+        if (SHADERC_FOUND)
+            list(APPEND FFmpeg_HWACCEL_FLAGS --enable-libshaderc)
+            list(APPEND FFmpeg_HWACCEL_LIBRARIES ${SHADERC_LIBRARIES})
+            list(APPEND FFmpeg_HWACCEL_INCLUDE_DIRS ${SHADERC_INCLUDE_DIRS})
+            list(APPEND FFmpeg_HWACCEL_LDFLAGS ${SHADERC_LDFLAGS})
+        endif()
+        list(APPEND FFmpeg_HWACCEL_LIBRARIES ${Vulkan_LIBRARIES})
+        list(APPEND FFmpeg_HWACCEL_INCLUDE_DIRS ${Vulkan_INCLUDE_DIRS})
+        message(STATUS "Vulkan hwaccel enabled for FFmpeg (AMD/Intel/NVIDIA)")
+    else()
+        message(STATUS "Vulkan hwaccel skipped: Vulkan=${Vulkan_FOUND}, glslang=${GLSLANG_PROGRAM}, shaderc=${SHADERC_FOUND}")
+        list(APPEND FFmpeg_HWACCEL_FLAGS --disable-vulkan)
+    endif()
+
     find_program(BASH_PROGRAM bash REQUIRED)
 
     set(FFmpeg_CROSS_COMPILE_FLAGS "")

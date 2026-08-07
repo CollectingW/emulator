@@ -228,15 +228,26 @@ export LLVM_PROFILE_FILE="$(dirname "$APPIMAGE")/default-%p.profraw"
 HOOK_EOF
 chmod +x ./AppDir/bin/01-llvm-profile.hook
 
-# Direct libva to search host system driver paths for hardware VAAPI video decoding,
-# enabling hardware acceleration on all distros without bundling Mesa OpenGL/Gallium/LLVM bloat.
-cat <<-'HOOK_EOF' > ./AppDir/bin/02-vaapi.hook
+# Force XCB (X11/Xwayland) platform on GNOME desktops.
+# GNOME 48 has a Mutter compositor bug where native Wayland Qt windows render
+# incorrectly (black/frozen, missing icons). XCB via Xwayland sidesteps this.
+# Only applied when GNOME is detected AND Xwayland is running ($DISPLAY set).
+# If X11 is unavailable (e.g. GNOME 50+ pure Wayland), falls back to native
+# Wayland. The user can override with QT_QPA_PLATFORM=wayland.
+# See: https://codeberg.org/pkgforge-dev/Citron-AppImage/issues/50
+cat <<-'HOOK_EOF' > ./AppDir/bin/03-gnome-xcb.hook
 #!/bin/sh
-if [ -z "${LIBVA_DRIVERS_PATH:-}" ]; then
-    export LIBVA_DRIVERS_PATH="/usr/lib64/dri:/usr/lib/x86_64-linux-gnu/dri:/usr/lib/dri"
+if [ -z "${QT_QPA_PLATFORM:-}" ]; then
+    case "${XDG_CURRENT_DESKTOP:-}" in
+        *GNOME*|*gnome*)
+            if [ -n "${DISPLAY:-}" ]; then
+                export QT_QPA_PLATFORM=xcb
+            fi
+            ;;
+    esac
 fi
 HOOK_EOF
-chmod +x ./AppDir/bin/02-vaapi.hook
+chmod +x ./AppDir/bin/03-gnome-xcb.hook
 
 # Build the AppImage
 ./quick-sharun --make-appimage

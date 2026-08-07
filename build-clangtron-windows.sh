@@ -1687,7 +1687,10 @@ rebuild_ffmpeg_pthread_free() {
             --enable-filter=yadif,scale,aresample \
             --enable-protocol=file \
             --enable-dxva2 \
-            --enable-d3d11va
+            --enable-d3d11va \
+            --enable-vulkan \
+            --enable-hwaccel=h264_vulkan \
+            --enable-hwaccel=vp9_vulkan
     ) || {
         error "[ffmpeg-rebuild] FFmpeg configure failed"
     }

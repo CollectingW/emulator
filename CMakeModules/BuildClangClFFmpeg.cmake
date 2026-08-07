@@ -45,7 +45,7 @@ function(citron_build_clangcl_ffmpeg)
     get_filename_component(_ar_tool_dir "${CMAKE_AR}" DIRECTORY)
     execute_process(
         COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
-            "${BASH_PROGRAM}" -lc "cygpath -am '${_source_dir}' && cygpath -am '${_build_dir}' && cygpath -am '${_install_dir}' && cygpath -au '${_clangcl_tool_dir}' && cygpath -au '${_linker_tool_dir}' && cygpath -au '${_ar_tool_dir}' && cygpath -au '${_install_dir}'"
+            "${BASH_PROGRAM}" -lc "(_winpath() { cygpath -dos \"\$1\" 2>/dev/null || cygpath -am \"\$1\"; }; _winpath '${_source_dir}' && _winpath '${_build_dir}' && _winpath '${_install_dir}' && cygpath -au '${_clangcl_tool_dir}' && cygpath -au '${_linker_tool_dir}' && cygpath -au '${_ar_tool_dir}' && cygpath -au '${_install_dir}' && cygpath -au '${_source_dir}' && cygpath -au '${_build_dir}')"
         OUTPUT_VARIABLE _clangcl_ffmpeg_paths
         OUTPUT_STRIP_TRAILING_WHITESPACE
         COMMAND_ERROR_IS_FATAL ANY
@@ -59,6 +59,8 @@ function(citron_build_clangcl_ffmpeg)
     list(GET _clangcl_ffmpeg_paths 5 _ar_tool_dir_msys)
     # MSYS paths for bash commands (cd, mv) — separate from Windows mixed paths
     list(GET _clangcl_ffmpeg_paths 6 _install_dir_msys)
+    list(GET _clangcl_ffmpeg_paths 7 _source_dir_msys)
+    list(GET _clangcl_ffmpeg_paths 8 _build_dir_msys)
     set(_build_stamp "${_install_dir}/.built")
     file(MAKE_DIRECTORY "${_build_dir}" "${_install_dir}")
 
@@ -116,6 +118,9 @@ function(citron_build_clangcl_ffmpeg)
         "--enable-hwaccel=vp9_dxva2"
         "--enable-hwaccel=vp9_d3d11va"
         "--enable-hwaccel=vp9_d3d11va2"
+        "--enable-vulkan"
+        "--enable-hwaccel=h264_vulkan"
+        "--enable-hwaccel=vp9_vulkan"
         "--enable-filter=yadif,scale"
         "--enable-dxva2"
         "--enable-d3d11va"
@@ -132,7 +137,7 @@ function(citron_build_clangcl_ffmpeg)
         COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
             "${BASH_PROGRAM}" -lc "${_ffmpeg_configure_command}"
         COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
-            "${BASH_PROGRAM}" -lc "perl -0pi -e 's{^SRC_PATH=.*$}{SRC_PATH=${_source_dir_win}}m; s{(?<![A-Za-z0-9_])/([A-Za-z])/}{uc($1).q{:/}}ge; s{^(AR|AR_CMD)=llvm-lib}{$1=llvm-ar}mg' '${_build_dir_win}/ffbuild/config.mak' '${_build_dir_win}/ffbuild/config.sh'"
+            "${BASH_PROGRAM}" -lc "perl -0pi -e 's{\\Q${_source_dir_msys}\\E}{${_source_dir_win}}g; s{\\Q${_build_dir_msys}\\E}{${_build_dir_win}}g; s{^SRC_PATH\\s*:?=\\s*.*$}{SRC_PATH=${_source_dir_win}}mg; s{^(AR|AR_CMD)=llvm-lib}{$1=llvm-ar}mg' '${_build_dir_win}/ffbuild/config.mak' '${_build_dir_win}/ffbuild/config.sh'"
         COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
             "${BASH_PROGRAM}" -lc "export PATH='${_clangcl_tool_dir_msys}:${_linker_tool_dir_msys}:${_ar_tool_dir_msys}':$PATH && '${MAKE_PROGRAM}' -j${_ffmpeg_jobs}"
         COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"

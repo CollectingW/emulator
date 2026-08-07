@@ -392,6 +392,7 @@ _setup_apt() {
         nasm yasm perl gperf \
         autoconf automake libtool make \
         glslang-tools \
+        libvulkan-dev libshaderc-dev \
         patchelf \
         lsb-release software-properties-common gnupg \
         libelf-dev libzstd-dev libudev-dev zstd \
@@ -520,6 +521,7 @@ _setup_pacman() {
         nasm yasm perl gperf \
         autoconf automake libtool make \
         shaderc clang lld llvm zstd \
+        vulkan-headers vulkan-icd-loader \
         patchelf \
         elfutils systemd-libs \
         libglvnd libxkbcommon wayland \
@@ -578,6 +580,7 @@ _setup_dnf() {
         nasm yasm perl gperf \
         autoconf automake libtool make \
         glslc clang lld patchelf \
+        vulkan-headers vulkan-loader-devel shaderc-devel \
         elfutils-libelf-devel libudev-devel zstd \
         libglvnd-devel mesa-libGL-devel libxkbcommon-devel wayland-devel \
         fontconfig-devel freetype-devel
@@ -629,6 +632,7 @@ _setup_yum() {
         nasm yasm perl gperf \
         autoconf automake libtool make \
         glslc clang lld patchelf \
+        vulkan-headers vulkan-loader-devel shaderc-devel \
         elfutils-libelf-devel libudev-devel zstd \
         libglvnd-devel mesa-libGL-devel libxkbcommon-devel wayland-devel \
         fontconfig-devel freetype-devel
@@ -679,6 +683,7 @@ _setup_zypper() {
         nasm yasm perl gperf \
         autoconf automake libtool make \
         shaderc clang lld llvm patchelf \
+        vulkan-headers vulkan-devel libshaderc-devel \
         libelf-devel libudev-devel zstd \
         Mesa-libGL-devel libglvnd-devel libxkbcommon-devel libwayland-client0 \
         fontconfig-devel freetype2-devel
@@ -728,7 +733,7 @@ _setup_emerge() {
         dev-lang/nasm dev-lang/yasm \
         llvm-core/clang llvm-core/lld \
         dev-build/autoconf dev-build/automake dev-build/libtool \
-        media-libs/shaderc \
+        media-libs/shaderc dev-util/vulkan-headers media-libs/vulkan-loader \
         dev-util/gperf dev-util/patchelf \
         dev-libs/elfutils virtual/libudev app-arch/zstd \
         media-libs/libglvnd x11-libs/libxkbcommon dev-libs/wayland \
