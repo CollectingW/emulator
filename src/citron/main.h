@@ -158,6 +158,7 @@ public:
     bool NextendoByamlRequired(u64 title_id) const;
     bool NextendoByamlInstalled(u64 title_id) const;
     bool NextendoByamlSkipped(u64 title_id) const;
+    bool NextendoByamlDownloadEnabled() const;
     bool IsConfiguring() const {
         return m_is_configuring;
     }
