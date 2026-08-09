@@ -158,8 +158,10 @@ static FileSys::VirtualFile VfsDirectoryCreateFileWrapper(const FileSys::Virtual
 #include "citron/loading_screen.h"
 #include "citron/main.h"
 #include "citron/nextendo_account_dialog.h"
+#include "citron/nextendo_population_dialog.h"
 #include "citron/nextendo_controller.h"
 #include "citron/nextendo_online_counts.h"
+#include "citron/nextendo_population_history.h"
 #include "citron/nextendo_save_sync.h"
 #include "citron/nextendo_toast.h"
 #include "citron/play_time_manager.h"
@@ -1280,6 +1282,7 @@ void GMainWindow::InitializeWidgets() {
     nextendo_controller = new NextendoController(*system, this, this);
     nextendo_toast = new NextendoToast(this);
     Nextendo::OnlineCounts::Start(this);
+    Nextendo::PopulationHistory::Start(this);
 
     // Create status bar
     // Style applied in UpdateUITheme()
@@ -1988,6 +1991,8 @@ void GMainWindow::ConnectMenuEvents() {
         }
         NextendoAccountDialog(nextendo_controller, this).exec();
     });
+    connect(ui->action_Nextendo_Population, &QAction::triggered, this,
+            [this] { NextendoPopulationDialog(this).exec(); });
     connect(ui->action_Nextendo_Sign_In, &QAction::triggered, nextendo_controller,
             &NextendoController::SignIn);
     connect(ui->action_Nextendo_Sign_Out, &QAction::triggered, nextendo_controller,

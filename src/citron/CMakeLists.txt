@@ -278,6 +278,10 @@ add_executable(citron
     nextendo_network_probe.h
     nextendo_online_counts.cpp
     nextendo_online_counts.h
+    nextendo_population_dialog.cpp
+    nextendo_population_dialog.h
+    nextendo_population_history.cpp
+    nextendo_population_history.h
     nextendo_save_sync.cpp
     nextendo_save_sync.h
     nextendo_toast.cpp
@@ -326,6 +330,8 @@ add_executable(citron
     ui/game_grid_view.h
     ui/game_carousel_view.cpp
     ui/game_carousel_view.h
+    ui/population_bar_chart.cpp
+    ui/population_bar_chart.h
     ui/nextendo_profile_chip.cpp
     ui/nextendo_profile_chip.h
     ui/nextendo_status_cluster.cpp
