@@ -43,6 +43,7 @@ class VramOverlay;
 class ControllerOverlay;
 class ProfilerWidget;
 class ControllerDialog;
+class QDialog;
 class QLabel;
 class MultiplayerState;
 class NextendoAccountDialog;
@@ -457,6 +458,7 @@ private:
     std::string nextendo_last_pushed_app_id;
     NextendoController* nextendo_controller = nullptr;
     NextendoToast* nextendo_toast = nullptr;
+    QDialog* nextendo_signin_dialog = nullptr;
     OverlayDialog* shutdown_dialog{};
     PerformanceOverlay* performance_overlay{};
     MultiplayerRoomOverlay* multiplayer_room_overlay{};

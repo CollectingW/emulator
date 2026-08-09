@@ -124,7 +124,7 @@ void NextendoController::SignIn() {
             }
             QMetaObject::invokeMethod(
                 this,
-                [url] {
+                [this, url] {
 #ifdef __linux__
                     // xdg-desktop-portal can report success without a browser ever appearing.
                     qint64 pid = -1;
@@ -137,6 +137,7 @@ void NextendoController::SignIn() {
                     LOG_INFO(Frontend, "NextendoController::SignIn: QDesktopServices::openUrl -> {}",
                              ok);
 #endif
+                    emit SignInUrlReady(QString::fromStdString(url));
                 },
                 Qt::QueuedConnection);
         };
@@ -154,6 +155,7 @@ void NextendoController::SignIn() {
                 }
                 if (!result.ok) {
                     emit StatusChanged(QString::fromStdString(result.error));
+                    emit SignInFinished();
                     return;
                 }
 
@@ -163,6 +165,7 @@ void NextendoController::SignIn() {
                 Common::NextendoFriends::SetLocalStatus(Common::NextendoFriends::PresenceOnline);
                 first_poll = true;
                 emit AccountLinked();
+                emit SignInFinished();
                 RefreshFriendCache();
             },
             Qt::QueuedConnection);
