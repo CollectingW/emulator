@@ -37,6 +37,22 @@ constexpr const char* CanonicalUrl = "https://nextendo.network";
 constexpr const char* ClientId = "nextendo-emulator";
 constexpr int TimeoutSeconds = 15;
 
+// httplib renamed Client::get_openssl_verify_result() to get_verify_result()
+// when it grew support for TLS backends other than OpenSSL. The vendored
+// desktop copy (0.14.0) still only has the old name; vcpkg's Android port
+// (0.37.1+) only has the new one. Call whichever this build actually has.
+// Must be a template: if constexpr only discards the untaken branch when the
+// condition depends on a template parameter, otherwise both branches are
+// still semantically checked and the missing member errors out regardless.
+template <typename Client>
+long GetSslVerifyResult(Client& client) {
+    if constexpr (requires { client.get_verify_result(); }) {
+        return client.get_verify_result();
+    } else {
+        return client.get_openssl_verify_result();
+    }
+}
+
 struct Callback {
     std::mutex mutex;
     std::condition_variable cv;
@@ -187,6 +203,11 @@ bool IsLoopback(const std::string& host) {
     return host == "127.0.0.1" || host == "localhost" || host == "[::1]" || host == "::1";
 }
 
+// Set by SetCaCertPathOverride(). Only actually consulted on Android below -- there's no fixed
+// well-known bundle path to probe for like the desktop Linux distros have, so the caller extracts
+// a bundled .pem asset to app-private storage once at startup and hands us that path instead.
+std::string g_ca_cert_path_override;
+
 // CMakeModules/openssl_build.cmake links web_service against a static OpenSSL built from source
 // (originally for Windows cross-compilation, but it's wired up unconditionally on every
 // platform). X509_get_default_cert_file()/_dir() are compile-time macros baked into that vendored
@@ -195,7 +216,16 @@ bool IsLoopback(const std::string& host) {
 // bundle directly. On Windows/macOS there's no equivalent fixed path; leave the client's cert
 // path unset so httplib falls through to its own native cert-store loader for those platforms.
 void ApplyCaCertPath(httplib::Client& client) {
-#ifdef __linux__
+#if defined(__ANDROID__)
+    // NDK toolchains define __linux__ too, so this must be checked first. Android has no
+    // filesystem-visible system CA bundle to probe for at all (it uses its own trust store,
+    // opaque to a plain httplib::Client), hence the override rather than a candidate-path scan.
+    if (!g_ca_cert_path_override.empty() && std::filesystem::exists(g_ca_cert_path_override)) {
+        client.set_ca_cert_path(g_ca_cert_path_override);
+    } else {
+        LOG_ERROR(WebService, "ApplyCaCertPath: no CA bundle override set (Android)");
+    }
+#elif defined(__linux__)
     static constexpr std::array<const char*, 4> candidates{
         "/etc/ssl/certs/ca-certificates.crt", // Debian/Ubuntu/Arch
         "/etc/pki/tls/certs/ca-bundle.crt",   // Fedora/RHEL/CentOS
@@ -283,7 +313,7 @@ httplib::Result Send(const std::string& method, const std::string& path, const s
                  : method == "PUT"   ? client.Put(path, headers, body, "application/json")
                                      : client.Post(path, headers, body, "application/json");
     if (!result) {
-        const long verify_result = client.get_openssl_verify_result();
+        const long verify_result = GetSslVerifyResult(client);
         LOG_ERROR(WebService, "Send {} {}: httplib error={}, openssl verify_result={} ({})",
                   method, path, httplib::to_string(result.error()), verify_result,
                   X509_verify_cert_error_string(verify_result));
@@ -316,6 +346,10 @@ std::string ErrorFrom(const std::string& payload, const std::string& fallback) {
 }
 
 } // Anonymous namespace
+
+void SetCaCertPathOverride(std::string path) {
+    g_ca_cert_path_override = std::move(path);
+}
 
 std::string BaseUrl() {
     static const std::string url = [] {
@@ -423,7 +457,7 @@ LoginResult SignInWithBrowser(const std::function<void(const std::string&)>& ope
     const auto result = client.Post("/api/oauth/token", form);
     if (!result) {
         out.error = "Could not reach the Nextendo account server.";
-        const long verify_result = client.get_openssl_verify_result();
+        const long verify_result = GetSslVerifyResult(client);
         LOG_ERROR(WebService,
                   "SignInWithBrowser: token exchange had no response (httplib error={}, "
                   "openssl verify_result={} [{}])",

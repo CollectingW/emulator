@@ -46,6 +46,7 @@ import org.citron.citron_emu.utils.FileUtil
 import org.citron.citron_emu.utils.GameIconUtils
 import org.citron.citron_emu.utils.GpuDriverHelper
 import org.citron.citron_emu.utils.MemoryUtil
+import org.citron.citron_emu.utils.NativeNextendo
 import org.citron.citron_emu.utils.ViewUtils.updateMargins
 import org.citron.citron_emu.utils.collect
 import androidx.documentfile.provider.DocumentFile
@@ -228,6 +229,59 @@ class GamePropertiesFragment : Fragment() {
                         }
                     )
                 )
+
+                val cloudSaveTitleId = args.game.programId.toULongOrNull()?.toLong()
+                    ?: args.game.programId.toULongOrNull(16)?.toLong()
+                if (cloudSaveTitleId != null && NativeNextendo.isCloudSaveEligible(cloudSaveTitleId)) {
+                    add(
+                        SubmenuProperty(
+                            R.string.nextendo_cloud_save_upload,
+                            R.string.nextendo_cloud_save_upload_description,
+                            R.drawable.ic_save
+                        ) {
+                            if (!NativeNextendo.isLinked()) {
+                                Toast.makeText(
+                                    requireContext(),
+                                    R.string.nextendo_not_signed_in,
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            } else {
+                                ProgressDialogFragment.newInstance(
+                                    requireActivity(),
+                                    R.string.nextendo_cloud_save_uploading,
+                                    false
+                                ) { _, _ ->
+                                    NativeNextendo.pushSave(cloudSaveTitleId)
+                                    getString(R.string.nextendo_cloud_save_upload_complete)
+                                }.show(parentFragmentManager, ProgressDialogFragment.TAG)
+                            }
+                        }
+                    )
+                    add(
+                        SubmenuProperty(
+                            R.string.nextendo_cloud_save_download,
+                            R.string.nextendo_cloud_save_download_description,
+                            R.drawable.ic_save
+                        ) {
+                            if (!NativeNextendo.isLinked()) {
+                                Toast.makeText(
+                                    requireContext(),
+                                    R.string.nextendo_not_signed_in,
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            } else {
+                                ProgressDialogFragment.newInstance(
+                                    requireActivity(),
+                                    R.string.nextendo_cloud_save_downloading,
+                                    false
+                                ) { _, _ ->
+                                    NativeNextendo.pullSave(cloudSaveTitleId, true)
+                                    getString(R.string.nextendo_cloud_save_download_complete)
+                                }.show(parentFragmentManager, ProgressDialogFragment.TAG)
+                            }
+                        }
+                    )
+                }
 
                 val saveDirFile = File(args.game.saveDir)
                 if (saveDirFile.exists()) {

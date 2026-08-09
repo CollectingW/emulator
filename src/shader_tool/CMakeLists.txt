@@ -10,6 +10,8 @@ create_target_directory_groups(shader_tool)
 target_link_libraries(shader_tool PRIVATE common shader_recompiler)
 target_link_libraries(shader_tool PRIVATE ${PLATFORM_LIBRARIES} Threads::Threads)
 
+citron_configure_lto(shader_tool)
+
 if(UNIX AND NOT APPLE)
     install(TARGETS shader_tool)
 endif()

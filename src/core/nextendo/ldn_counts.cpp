@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "citron/nextendo_ldn_counts.h"
+#include "core/nextendo/ldn_counts.h"
 
 #include <mutex>
 

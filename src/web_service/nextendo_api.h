@@ -34,6 +34,12 @@ struct OnlineStatus {
 // request carries the account token.
 std::string BaseUrl();
 
+// Overrides the CA bundle path applied to every client (see ApplyCaCertPath in the .cpp). Needed
+// on platforms with no fixed well-known system bundle path we can probe for -- currently Android,
+// where the caller extracts a bundled .pem asset to app-private storage and passes that path in
+// once at startup. Empty clears the override.
+void SetCaCertPathOverride(std::string path);
+
 // Signs in through the user's browser (OAuth loopback + PKCE), so the emulator never sees the
 // e-mail or password: password login on /api/login is website-only, behind a captcha. `open_url` is
 // handed the authorize URL to open. Blocks until the browser reaches the loopback callback.

@@ -272,8 +272,6 @@ add_executable(citron
     nextendo_compatible_titles.h
     nextendo_history_delegate.cpp
     nextendo_history_delegate.h
-    nextendo_ldn_counts.cpp
-    nextendo_ldn_counts.h
     nextendo_network_probe.cpp
     nextendo_network_probe.h
     nextendo_online_counts.cpp
@@ -282,8 +280,6 @@ add_executable(citron
     nextendo_population_dialog.h
     nextendo_population_history.cpp
     nextendo_population_history.h
-    nextendo_save_sync.cpp
-    nextendo_save_sync.h
     nextendo_toast.cpp
     nextendo_toast.h
     precompiled_headers.h

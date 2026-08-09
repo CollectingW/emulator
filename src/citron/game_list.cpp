@@ -73,7 +73,6 @@
 #include "citron/icon_selection_dialog.h"
 #include "citron/main.h"
 #include "citron/mod_manager/gamebanana_dialog.h"
-#include "citron/nextendo_ldn_counts.h"
 #include "citron/nextendo_population_history.h"
 #include "citron/multiplayer/state.h"
 #include "citron/poster_selection_dialog.h"
@@ -103,6 +102,7 @@
 #include "core/file_sys/registered_cache.h"
 #include "core/file_sys/savedata_factory.h"
 #include "core/hle/service/acc/profile_manager.h"
+#include "core/nextendo/ldn_counts.h"
 #include "frontend_common/content_manager.h"
 
 // A helper struct to cleanly pass game data

@@ -892,13 +892,32 @@ if (NOT APPLE AND NOT MSVC AND (CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR (CITRON
     find_program(LLD lld)
     find_program(MOLD mold)
 
-    if (MOLD AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "12.1")
+    # mold needs an external LLVMgold.so plugin to link LTO/thin-LTO object
+    # files; the Android NDK doesn't ship one (it moved to lld years ago, no
+    # binutils-gold bridge at all), so mold hard-fails there whenever
+    # CITRON_ENABLE_LTO is on. lld has native ThinLTO support with no plugin
+    # needed, and every NDK bundles its own ld.lld, so just always prefer it
+    # on Android rather than picking mold and having LTO builds break.
+    if (MOLD AND NOT ANDROID AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "12.1")
         message(NOTICE "Selecting mold as linker")
         add_link_options("-fuse-ld=mold")
-    elseif (LLD)
+    elseif (LLD OR ANDROID)
         message(NOTICE "Selecting lld as linker")
         add_link_options("-fuse-ld=lld")
     endif()
+endif()
+
+if (ANDROID AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    # CMake's bundled Modules/Compiler/Clang.cmake force-adds "-fuse-ld=gold"
+    # to CMAKE_CXX_LINK_OPTIONS_IPO for any IPO/LTO-enabled target when
+    # ANDROID is set and CMAKE_ANDROID_NDK_VERSION isn't >= 22 (a workaround
+    # for https://github.com/android-ndk/ndk/issues/242, an NDK<22 bug). Our
+    # Android build path doesn't populate CMAKE_ANDROID_NDK_VERSION, so this
+    # misfires unconditionally against a modern NDK that ships no gold binary
+    # at all, stacking with our own -fuse-ld=mold/lld choice above and
+    # producing a hard "invalid linker name" error. Clang's own LTO needs no
+    # such linker plugin, so just drop the stray flag.
+    set(CMAKE_CXX_LINK_OPTIONS_IPO "")
 endif()
 
 add_subdirectory(src)

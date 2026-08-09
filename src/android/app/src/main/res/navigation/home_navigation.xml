@@ -31,7 +31,15 @@
         <action
             android:id="@+id/action_homeSettingsFragment_to_gameFoldersFragment"
             app:destination="@id/gameFoldersFragment" />
+        <action
+            android:id="@+id/action_homeSettingsFragment_to_nextendoFragment"
+            app:destination="@id/nextendoFragment" />
     </fragment>
+
+    <fragment
+        android:id="@+id/nextendoFragment"
+        android:name="org.citron.citron_emu.fragments.NextendoFragment"
+        android:label="NextendoFragment" />
 
     <fragment
         android:id="@+id/firstTimeSetupFragment"

@@ -41,6 +41,12 @@ jmethodID GetOnEmulationStarted();
 jmethodID GetOnEmulationStopped();
 jmethodID GetOnProgramChanged();
 
+jclass GetNativeNextendoClass();
+jmethodID GetOnOpenSignInUrlMethod();
+
+jclass GetNextendoFriendClass();
+jmethodID GetNextendoFriendConstructor();
+
 jclass GetGameClass();
 jmethodID GetGameConstructor();
 jfieldID GetGameTitleField();

@@ -7,6 +7,7 @@ add_library(citron-android SHARED
     native.cpp
     native.h
     native_config.cpp
+    native_nextendo.cpp
     android_settings.cpp
     game_metadata.cpp
     native_log.cpp
@@ -17,7 +18,7 @@ add_library(citron-android SHARED
 
 set_property(TARGET citron-android PROPERTY IMPORTED_LOCATION ${FFmpeg_LIBRARY_DIR})
 
-target_link_libraries(citron-android PRIVATE audio_core common core input_common frontend_common network Vulkan::Headers)
+target_link_libraries(citron-android PRIVATE audio_core common core input_common frontend_common network web_service Vulkan::Headers)
 target_link_libraries(citron-android PRIVATE android camera2ndk EGL glad jnigraphics log)
 if (ARCHITECTURE_arm64)
     target_link_libraries(citron-android PRIVATE adrenotools)

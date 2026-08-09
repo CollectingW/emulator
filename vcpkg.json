@@ -56,6 +56,14 @@
         {
           "name": "openssl",
           "platform": "!linux & !osx"
+        },
+        {
+          "name": "cpp-httplib",
+          "platform": "!linux & !osx"
+        },
+        {
+          "name": "libarchive",
+          "platform": "!linux & !osx"
         }
       ]
     },

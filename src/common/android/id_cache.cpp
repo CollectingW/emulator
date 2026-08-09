@@ -21,6 +21,11 @@ static jmethodID s_on_emulation_started;
 static jmethodID s_on_emulation_stopped;
 static jmethodID s_on_program_changed;
 
+static jclass s_native_nextendo_class;
+static jmethodID s_on_open_sign_in_url;
+static jclass s_nextendo_friend_class;
+static jmethodID s_nextendo_friend_constructor;
+
 static jclass s_game_class;
 static jmethodID s_game_constructor;
 static jfieldID s_game_title_field;
@@ -150,6 +155,22 @@ jmethodID GetOnEmulationStopped() {
 
 jmethodID GetOnProgramChanged() {
     return s_on_program_changed;
+}
+
+jclass GetNativeNextendoClass() {
+    return s_native_nextendo_class;
+}
+
+jmethodID GetOnOpenSignInUrlMethod() {
+    return s_on_open_sign_in_url;
+}
+
+jclass GetNextendoFriendClass() {
+    return s_nextendo_friend_class;
+}
+
+jmethodID GetNextendoFriendConstructor() {
+    return s_nextendo_friend_constructor;
 }
 
 jclass GetGameClass() {
@@ -412,6 +433,16 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved) {
     s_game_dir_constructor = env->GetMethodID(game_dir_class, "<init>", "(Ljava/lang/String;Z)V");
     env->DeleteLocalRef(game_dir_class);
 
+    const jclass native_nextendo_class =
+        env->FindClass("org/citron/citron_emu/utils/NativeNextendo");
+    s_native_nextendo_class = reinterpret_cast<jclass>(env->NewGlobalRef(native_nextendo_class));
+
+    const jclass nextendo_friend_class = env->FindClass("org/citron/citron_emu/model/NextendoFriend");
+    s_nextendo_friend_class = reinterpret_cast<jclass>(env->NewGlobalRef(nextendo_friend_class));
+    s_nextendo_friend_constructor = env->GetMethodID(
+        nextendo_friend_class, "<init>", "(JLjava/lang/String;Ljava/lang/String;ILjava/lang/String;Z)V");
+    env->DeleteLocalRef(nextendo_friend_class);
+
     // Initialize methods
     s_exit_emulation_activity =
         env->GetStaticMethodID(s_native_library_class, "exitEmulationActivity", "(I)V");
@@ -421,6 +452,8 @@ jint JNI_OnLoad(JavaVM* vm, void* reserved) {
         env->GetStaticMethodID(s_native_library_class, "onEmulationStarted", "()V");
     s_on_emulation_stopped =
         env->GetStaticMethodID(s_native_library_class, "onEmulationStopped", "(I)V");
+    s_on_open_sign_in_url = env->GetStaticMethodID(s_native_nextendo_class, "onOpenSignInUrl",
+                                                   "(Ljava/lang/String;)V");
     s_on_program_changed =
         env->GetStaticMethodID(s_native_library_class, "onProgramChanged", "(I)V");
 
@@ -566,6 +599,8 @@ void JNI_OnUnload(JavaVM* vm, void* reserved) {
     // UnInitialize Android Storage
     Common::FS::Android::UnRegisterCallbacks();
     env->DeleteGlobalRef(s_native_library_class);
+    env->DeleteGlobalRef(s_native_nextendo_class);
+    env->DeleteGlobalRef(s_nextendo_friend_class);
     env->DeleteGlobalRef(s_disk_cache_progress_class);
     env->DeleteGlobalRef(s_load_callback_stage_class);
     env->DeleteGlobalRef(s_game_dir_class);

@@ -1213,6 +1213,10 @@ add_library(core STATIC
     memory/dmnt_cheat_types.h
     memory/dmnt_cheat_vm.cpp
     memory/dmnt_cheat_vm.h
+    nextendo/ldn_counts.cpp
+    nextendo/ldn_counts.h
+    nextendo/save_sync.cpp
+    nextendo/save_sync.h
     perf_stats.cpp
     perf_stats.h
     precompiled_headers.h
@@ -1276,6 +1280,12 @@ endif()
 if (ENABLE_WEB_SERVICE)
     target_compile_definitions(core PRIVATE -DENABLE_WEB_SERVICE)
     target_link_libraries(core PRIVATE web_service)
+endif()
+
+# Add libarchive for Nextendo cloud save sync (core/nextendo/save_sync.cpp)
+if (TARGET LibArchive::LibArchive)
+    target_link_libraries(core PRIVATE LibArchive::LibArchive)
+    target_compile_definitions(core PRIVATE CITRON_ENABLE_LIBARCHIVE)
 endif()
 
 if (HAS_NCE)

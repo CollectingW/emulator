@@ -157,6 +157,17 @@ class HomeSettingsFragment : Fragment() {
             )
             add(
                 HomeSetting(
+                    R.string.nextendo,
+                    R.string.nextendo_description,
+                    R.drawable.ic_nextendo,
+                    {
+                        binding.root.findNavController()
+                            .navigate(R.id.action_homeSettingsFragment_to_nextendoFragment)
+                    }
+                )
+            )
+            add(
+                HomeSetting(
                     R.string.verify_installed_content,
                     R.string.verify_installed_content_description,
                     R.drawable.ic_check_circle,

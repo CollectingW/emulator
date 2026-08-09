@@ -13,6 +13,7 @@ import org.citron.citron_emu.utils.DirectoryInitialization
 import org.citron.citron_emu.utils.DocumentsTree
 import org.citron.citron_emu.utils.GpuDriverHelper
 import org.citron.citron_emu.utils.Log
+import org.citron.citron_emu.utils.NativeNextendo
 
 fun Context.getPublicFilesDir(): File = getExternalFilesDir(null) ?: filesDir
 
@@ -41,8 +42,25 @@ class CitronApplication : Application() {
         NativeInput.reloadInputDevices()
         NativeLibrary.logDeviceInfo()
         Log.logDeviceInfo()
+        initializeNextendoCaCert()
 
         createNotificationChannels()
+    }
+
+    /**
+     * Nextendo's httplib client has no fixed system CA bundle path to probe for on Android (see
+     * ApplyCaCertPath in nextendo_api.cpp), so a bundled .pem asset is extracted to app-private
+     * storage once and the resulting path is handed to the native side before any Nextendo
+     * network call can happen.
+     */
+    private fun initializeNextendoCaCert() {
+        val caCertFile = File(filesDir, "nextendo_ca.pem")
+        if (!caCertFile.exists()) {
+            assets.open("nextendo_ca.pem").use { input ->
+                caCertFile.outputStream().use { output -> input.copyTo(output) }
+            }
+        }
+        NativeNextendo.setCaCertPath(caCertFile.absolutePath)
     }
 
     companion object {

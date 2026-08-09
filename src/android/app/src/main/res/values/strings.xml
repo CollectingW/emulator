@@ -463,6 +463,35 @@
     <string name="direct_connect_invalid_input">Enter a server address, port, and 4-20 character nickname.</string>
     <string name="direct_connect_disconnect">Disconnect</string>
 
+    <!-- Nextendo -->
+    <string name="nextendo">Nextendo Account</string>
+    <string name="nextendo_description">Sign in, manage friends, and sync cloud saves</string>
+    <string name="nextendo_sign_in">Sign in with Browser</string>
+    <string name="nextendo_sign_out">Sign Out</string>
+    <string name="nextendo_signing_in">Signing in…</string>
+    <string name="nextendo_signed_in_as">Signed in as %1$s</string>
+    <string name="nextendo_not_signed_in">Not signed in</string>
+    <string name="nextendo_no_web_service">This build has no web services support.</string>
+    <string name="nextendo_accept">Accept</string>
+    <string name="nextendo_decline">Decline</string>
+    <string name="nextendo_remove">Remove</string>
+    <string name="nextendo_add_friend">Add Friend</string>
+    <string name="nextendo_friend_code_hint">Friend code</string>
+    <string name="nextendo_status_online">Online</string>
+    <string name="nextendo_status_in_game">Playing %1$s</string>
+    <string name="nextendo_status_offline">Offline</string>
+    <string name="nextendo_incoming_request">Wants to be friends</string>
+    <string name="nextendo_request_sent">Request sent to %1$s</string>
+    <string name="nextendo_no_friends">No friends yet. Add one by friend code above.</string>
+    <string name="nextendo_cloud_save_upload">Upload Save to Cloud</string>
+    <string name="nextendo_cloud_save_upload_description">Back up this game\'s save to your Nextendo account</string>
+    <string name="nextendo_cloud_save_download">Download Save from Cloud</string>
+    <string name="nextendo_cloud_save_download_description">Replace this game\'s local save with the cloud copy</string>
+    <string name="nextendo_cloud_save_uploading">Uploading save…</string>
+    <string name="nextendo_cloud_save_downloading">Downloading save…</string>
+    <string name="nextendo_cloud_save_upload_complete">Save uploaded to the cloud.</string>
+    <string name="nextendo_cloud_save_download_complete">Cloud save applied.</string>
+
     <!-- Zep Zone Headers -->
     <string name="memory_layout_header">Memory Layout</string>
     <string name="astc_settings_header">ASTC Settings</string>
