@@ -130,6 +130,7 @@ function(citron_build_clangtron_ffmpeg)
         "--disable-everything"
         "--disable-vaapi"
         "--disable-vdpau"
+        "--disable-iconv"
         "--enable-decoder=h264,vp8,vp9,aac,mp3,opus,flac"
         "--enable-demuxer=mp4,matroska,ogg"
         "--enable-filter=yadif,scale,aresample"
@@ -179,7 +180,7 @@ function(citron_build_clangtron_ffmpeg)
         "${_install_dir}/lib/libavformat.a"
         "${_install_dir}/lib/libavcodec.a"
         "${_install_dir}/lib/libavutil.a"
-        bcrypt ole32 strmiids mfuuid mfplat uuid d3d11 dxgi dxva2 iconv)
+        bcrypt ole32 strmiids mfuuid mfplat uuid d3d11 dxgi dxva2)
 
     set(FFmpeg_FOUND YES CACHE BOOL "" FORCE)
     set(FFmpeg_INCLUDE_DIR "${_install_dir}/include"
