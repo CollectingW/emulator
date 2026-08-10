@@ -209,6 +209,10 @@ void NextendoController::ManualSaveDownload(u64 title_id) {
 #endif
 }
 
+void NextendoController::QuickStart(u64 title_id) {
+    emit QuickStartRequested(title_id);
+}
+
 void NextendoController::ApplyProfileName(const std::string& name) {
     if (name.empty()) {
         return;

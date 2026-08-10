@@ -1989,7 +1989,14 @@ void GMainWindow::ConnectMenuEvents() {
             nextendo_controller->SignIn();
             return;
         }
-        NextendoAccountDialog(nextendo_controller, this).exec();
+        NextendoAccountDialog(nextendo_controller, *system, this).exec();
+    });
+    connect(nextendo_toast, &NextendoToast::clicked, this, [this](NextendoToast::Kind kind) {
+        if (kind != NextendoToast::Kind::Request || !Common::NextendoAccount::IsLinked()) {
+            return;
+        }
+        NextendoAccountDialog(nextendo_controller, *system, this, NextendoAccountDialog::kRequestsPage)
+            .exec();
     });
     connect(ui->action_Nextendo_Population, &QAction::triggered, this,
             [this] { NextendoPopulationDialog(this).exec(); });
@@ -2087,6 +2094,12 @@ void GMainWindow::ConnectMenuEvents() {
                 nextendo_toast->Show(tr("Friend Request Sent!"), friend_code, {},
                                      NextendoToast::Kind::RequestSent);
             });
+    connect(nextendo_controller, &NextendoController::QuickStartRequested, this, [this](u64 title_id) {
+        const QString path = game_list->GetGamePath(title_id);
+        if (!path.isEmpty()) {
+            BootGameFromList(path, StartGameType::Normal);
+        }
+    });
     connect(ui->action_Connect_To_Room, &QAction::triggered, multiplayer_state,
             &MultiplayerState::OnDirectConnectToRoom);
     connect(ui->action_Show_Room, &QAction::triggered, multiplayer_state,

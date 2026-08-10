@@ -201,6 +201,7 @@ void NextendoToast::HideAnimated() {
 void NextendoToast::mousePressEvent(QMouseEvent* event) {
     QWidget::mousePressEvent(event);
     auto_hide_timer.stop();
+    emit clicked(kind);
     HideAnimated();
 }
 
