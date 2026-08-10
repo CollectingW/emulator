@@ -20,7 +20,9 @@
 #include "core/hle/result.h"
 #include "core/hle/service/ldn/ldn_results.h"
 #include "core/hle/service/ldn/ldn_types.h"
+#include "core/hle/service/ldn/network_client.h"
 #include "network/network.h"
+#include "network/room_member.h"
 
 namespace Service::LDN {
 
@@ -44,39 +46,41 @@ protected:
     LANDiscovery* discovery;
 };
 
-class LANDiscovery {
+class LANDiscovery : public INetworkClient {
 public:
-    using LanEventFunc = std::function<void()>;
+    using LanEventFunc = NetworkEventFunc;
 
     LANDiscovery(Network::RoomNetwork& room_network_);
     ~LANDiscovery();
 
-    State GetState() const;
+    State GetState() const override;
     void SetState(State new_state);
 
-    Result GetNetworkInfo(NetworkInfo& out_network) const;
-    Result GetNetworkInfo(NetworkInfo& out_network, std::span<NodeLatestUpdate> out_updates);
+    Result GetNetworkInfo(NetworkInfo& out_network) const override;
+    Result GetNetworkInfo(NetworkInfo& out_network,
+                          std::span<NodeLatestUpdate> out_updates) override;
 
-    DisconnectReason GetDisconnectReason() const;
-    Result Scan(std::span<NetworkInfo> out_networks, s16& out_count, const ScanFilter& filter);
-    Result SetAdvertiseData(std::span<const u8> data);
+    DisconnectReason GetDisconnectReason() const override;
+    Result Scan(std::span<NetworkInfo> out_networks, s16& out_count,
+               const ScanFilter& filter) override;
+    Result SetAdvertiseData(std::span<const u8> data) override;
 
-    Result OpenAccessPoint();
-    Result CloseAccessPoint();
+    Result OpenAccessPoint() override;
+    Result CloseAccessPoint() override;
 
-    Result OpenStation();
-    Result CloseStation();
+    Result OpenStation() override;
+    Result CloseStation() override;
 
     Result CreateNetwork(const SecurityConfig& security_config, const UserConfig& user_config,
-                         const NetworkConfig& network_config);
-    Result DestroyNetwork();
+                         const NetworkConfig& network_config) override;
+    Result DestroyNetwork() override;
 
     Result Connect(const NetworkInfo& network_info_, const UserConfig& user_config,
-                   u16 local_communication_version);
-    Result Disconnect();
+                   u16 local_communication_version) override;
+    Result Disconnect() override;
 
-    Result Initialize(LanEventFunc lan_event_ = empty_func, bool listening = true);
-    Result Finalize();
+    Result Initialize(NetworkEventFunc lan_event_ = empty_func, bool listening = true) override;
+    Result Finalize() override;
 
     void ReceivePacket(const Network::LDNPacket& packet);
 
@@ -130,5 +134,6 @@ protected:
     LanEventFunc lan_event;
 
     Network::RoomNetwork& room_network;
+    Network::RoomMember::CallbackHandle<Network::LDNPacket> ldn_packet_received;
 };
 } // namespace Service::LDN

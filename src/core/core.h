@@ -112,6 +112,9 @@ class HIDCore;
 
 namespace Network {
 class RoomNetwork;
+namespace RyuLdn {
+class RyuLdnClient;
+}
 }
 
 namespace Tools {
@@ -396,6 +399,9 @@ public:
 
     /// Gets an immutable reference to the Room Network.
     [[nodiscard]] const Network::RoomNetwork& GetRoomNetwork() const;
+
+    [[nodiscard]] Network::RyuLdn::RyuLdnClient& GetRyuLdnClient();
+    [[nodiscard]] const Network::RyuLdn::RyuLdnClient& GetRyuLdnClient() const;
 
     [[nodiscard]] Tools::RenderdocAPI& GetRenderdocAPI();
 

@@ -53,6 +53,7 @@ struct ResolutionScalingInfo {
 #define SWITCHABLE(TYPE, RANGED) extern template class SwitchableSetting<TYPE, RANGED>
 
 SETTING(AudioEngine, false);
+SETTING(MultiplayerBackend, false);
 SETTING(bool, false);
 SETTING(int, false);
 SETTING(s32, false);
@@ -729,6 +730,10 @@ struct Values {
     Setting<std::string> network_interface{linkage, std::string(), "network_interface",
                                            Category::Network};
     Setting<std::string> lobby_api_url{linkage, "api.ynet-fun.xyz", "lobby_api_url",
+                                       Category::Network};
+    Setting<MultiplayerBackend> multiplayer_backend{linkage, MultiplayerBackend::RoomFunNet,
+                                                     "multiplayer_backend", Category::Network};
+    Setting<std::string> ryuldn_server{linkage, "ldn.ryujinx.app:30456", "ryuldn_server",
                                        Category::Network};
     Setting<bool> enable_nextendo{linkage, false, "enable_nextendo", Category::Network};
     Setting<std::string> nextendo_server_ip{linkage, "51.178.29.194", "nextendo_server_ip",

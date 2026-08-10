@@ -766,6 +766,9 @@ add_library(core STATIC
     hle/service/ldn/ldn.h
     hle/service/ldn/ldn_results.h
     hle/service/ldn/ldn_types.h
+    hle/service/ldn/network_client.h
+    hle/service/ldn/ryuldn_network_client.cpp
+    hle/service/ldn/ryuldn_network_client.h
     hle/service/ldn/monitor_service.cpp
     hle/service/ldn/monitor_service.h
     hle/service/ldn/sf_monitor_service.cpp
@@ -1185,6 +1188,11 @@ add_library(core STATIC
     internal_network/network.h
     internal_network/network_interface.cpp
     internal_network/network_interface.h
+    internal_network/ryuldn/ryuldn_client.cpp
+    internal_network/ryuldn/ryuldn_client.h
+    internal_network/ryuldn/ryuldn_protocol.h
+    internal_network/ryuldn_proxy_socket.cpp
+    internal_network/ryuldn_proxy_socket.h
     internal_network/socket_proxy.cpp
     internal_network/socket_proxy.h
     internal_network/sockets.h

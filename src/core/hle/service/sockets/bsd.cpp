@@ -23,6 +23,8 @@
 #include "core/hle/service/sockets/sfdnsres.h"
 #include "core/hle/service/sockets/sockets_translate.h"
 #include "core/internal_network/network.h"
+#include "core/internal_network/ryuldn/ryuldn_client.h"
+#include "core/internal_network/ryuldn_proxy_socket.h"
 #include "core/internal_network/socket_proxy.h"
 #include "core/internal_network/sockets.h"
 #include "network/network.h"
@@ -922,7 +924,9 @@ std::pair<s32, Errno> BSD::SocketImpl(Domain domain, Type type, Protocol protoco
     // ENONMEM might be thrown here
 
     auto room_member = room_network.GetRoomMember().lock();
-    const bool using_proxy = room_member && room_member->IsConnected();
+    const bool room_active = room_member && room_member->IsConnected();
+    const bool ryuldn_active = ryuldn_client.IsConnected();
+    const bool using_proxy = room_active || ryuldn_active;
 
     LOG_INFO(Service, "New socket fd={} domain={} type={} protocol={} proxy={}",
              fd, domain, type, protocol, using_proxy);
@@ -937,10 +941,14 @@ std::pair<s32, Errno> BSD::SocketImpl(Domain domain, Type type, Protocol protoco
         descriptor.socket = std::make_shared<OfflineSocket>();
         descriptor.socket->Initialize(descriptor.domain, descriptor.type, descriptor.protocol);
         LOG_INFO(Service, "Airplane mode: created offline socket fd={}", fd);
-    } else if (using_proxy) {
+    } else if (room_active) {
         descriptor.socket = std::make_shared<Network::ProxySocket>(room_network);
         descriptor.socket->Initialize(descriptor.domain, descriptor.type, descriptor.protocol);
         LOG_DEBUG(Service, "Created new ProxySocket for fd={}", fd);
+    } else if (ryuldn_active) {
+        descriptor.socket = std::make_shared<Network::RyuLdnProxySocket>(ryuldn_client);
+        descriptor.socket->Initialize(descriptor.domain, descriptor.type, descriptor.protocol);
+        LOG_DEBUG(Service, "Created new RyuLdnProxySocket for fd={}", fd);
     } else {
         descriptor.socket = std::make_shared<Network::Socket>();
         descriptor.socket->Initialize(descriptor.domain, descriptor.type, descriptor.protocol);
@@ -1729,7 +1737,8 @@ void BSD::OnProxyPacketReceived(const Network::ProxyPacket& packet) {
 }
 
 BSD::BSD(Core::System& system_, const char* name)
-    : ServiceFramework{system_, name}, room_network{system_.GetRoomNetwork()} {
+    : ServiceFramework{system_, name}, room_network{system_.GetRoomNetwork()},
+      ryuldn_client{system_.GetRyuLdnClient()} {
     // clang-format off
     static const FunctionInfo functions[] = {
         {0, &BSD::RegisterClient, "RegisterClient"},
@@ -1786,12 +1795,15 @@ BSD::BSD(Core::System& system_, const char* name)
     } else {
         LOG_ERROR(Service, "Network isn't initialized");
     }
+    ryuldn_client.SetOnProxyPacketReceived(
+        [this](const Network::ProxyPacket& packet) { OnProxyPacketReceived(packet); });
 }
 
 BSD::~BSD() {
     if (auto room_member = room_network.GetRoomMember().lock()) {
         room_member->Unbind(proxy_packet_received);
     }
+    ryuldn_client.SetOnProxyPacketReceived(nullptr);
 
     ClearParkedUdpSockets();
 }

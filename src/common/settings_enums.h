@@ -103,6 +103,25 @@ inline u32 EnumMetadata<AudioEngine>::Index() {
     return 100;
 }
 
+enum class MultiplayerBackend : u32 {
+    RoomFunNet,
+    RyuLdn,
+};
+
+template <>
+inline std::vector<std::pair<std::string, MultiplayerBackend>>
+EnumMetadata<MultiplayerBackend>::Canonicalizations() {
+    return {
+        {"room_fun_net", MultiplayerBackend::RoomFunNet},
+        {"ryuldn", MultiplayerBackend::RyuLdn},
+    };
+}
+
+template <>
+inline u32 EnumMetadata<MultiplayerBackend>::Index() {
+    return 101;
+}
+
 ENUM(AudioMode, Mono, Stereo, Surround);
 
 ENUM(Language, Japanese, EnglishAmerican, French, German, Italian, Spanish, Chinese, Korean, Dutch,

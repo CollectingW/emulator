@@ -319,10 +319,18 @@ Result LANDiscovery::Disconnect() {
     return ResultSuccess;
 }
 
-Result LANDiscovery::Initialize(LanEventFunc lan_event_, bool listening) {
+Result LANDiscovery::Initialize(NetworkEventFunc lan_event_, bool listening) {
     std::scoped_lock lock{packet_mutex};
     if (inited) {
         return ResultSuccess;
+    }
+
+    if (auto room_member = room_network.GetRoomMember().lock()) {
+        ldn_packet_received = room_member->BindOnLdnPacketReceived(
+            [this](const Network::LDNPacket& packet) { ReceivePacket(packet); });
+    } else {
+        LOG_ERROR(Service_LDN, "Couldn't bind callback!");
+        return ResultAirplaneModeEnabled;
     }
 
     for (auto& station : stations) {
@@ -350,6 +358,10 @@ Result LANDiscovery::Finalize() {
         }
         if (state == State::StationConnected) {
             Disconnect();
+        }
+
+        if (auto room_member = room_network.GetRoomMember().lock()) {
+            room_member->Unbind(ldn_packet_received);
         }
 
         ResetStations();

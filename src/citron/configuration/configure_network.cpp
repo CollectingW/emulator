@@ -12,6 +12,9 @@ ConfigureNetwork::ConfigureNetwork(const Core::System& system_, QWidget* parent)
     : QWidget(parent), ui(std::make_unique<Ui::ConfigureNetwork>()), system{system_} {
     ui->setupUi(this);
 
+    ui->multiplayer_backend->addItem(tr("API Fun Net"));
+    ui->multiplayer_backend->addItem(tr("RyuLDN"));
+
     ui->network_interface->addItem(tr("None"));
     for (const auto& iface : Network::GetAvailableNetworkInterfaces()) {
         ui->network_interface->addItem(QString::fromStdString(iface.name));
@@ -30,6 +33,8 @@ ConfigureNetwork::~ConfigureNetwork() = default;
 void ConfigureNetwork::ApplyConfiguration() {
     // Apply all settings from the UI to the settings system
     Settings::values.airplane_mode = ui->airplane_mode->isChecked();
+    Settings::values.multiplayer_backend =
+        static_cast<Settings::MultiplayerBackend>(ui->multiplayer_backend->currentIndex());
     Settings::values.network_interface = ui->network_interface->currentText().toStdString();
     Settings::values.lobby_api_url = ui->lobby_api_url->text().toStdString();
 }
@@ -51,22 +56,38 @@ void ConfigureNetwork::SetConfiguration() {
     ui->airplane_mode->setChecked(Settings::values.airplane_mode.GetValue());
     ui->airplane_mode->setEnabled(runtime_lock);
 
+    ui->multiplayer_backend->setCurrentIndex(
+        static_cast<int>(Settings::values.multiplayer_backend.GetValue()));
+    ui->multiplayer_backend->setEnabled(runtime_lock);
+
     const std::string& network_interface = Settings::values.network_interface.GetValue();
     ui->network_interface->setCurrentText(QString::fromStdString(network_interface));
 
     ui->lobby_api_url->setText(QString::fromStdString(Settings::values.lobby_api_url.GetValue()));
 
     const bool networking_enabled = runtime_lock && !ui->airplane_mode->isChecked();
+    const bool room_fun_net_selected = ui->multiplayer_backend->currentIndex() ==
+                                       static_cast<int>(Settings::MultiplayerBackend::RoomFunNet);
     ui->network_interface->setEnabled(networking_enabled);
-    ui->lobby_api_url->setEnabled(networking_enabled);
-    ui->restore_default_lobby_api->setEnabled(networking_enabled);
+    ui->lobby_api_url->setEnabled(networking_enabled && room_fun_net_selected);
+    ui->restore_default_lobby_api->setEnabled(networking_enabled && room_fun_net_selected);
 
     connect(ui->airplane_mode, &QCheckBox::toggled, this, [this, runtime_lock](bool checked) {
         const bool enabled = !checked && runtime_lock;
+        const bool room_fun_net = ui->multiplayer_backend->currentIndex() ==
+                                  static_cast<int>(Settings::MultiplayerBackend::RoomFunNet);
         ui->network_interface->setEnabled(enabled);
-        ui->lobby_api_url->setEnabled(enabled);
-        ui->restore_default_lobby_api->setEnabled(enabled);
+        ui->lobby_api_url->setEnabled(enabled && room_fun_net);
+        ui->restore_default_lobby_api->setEnabled(enabled && room_fun_net);
     });
+    connect(ui->multiplayer_backend, qOverload<int>(&QComboBox::currentIndexChanged), this,
+            [this](int index) {
+                const bool interface_enabled = ui->network_interface->isEnabled();
+                const bool room_fun_net =
+                    index == static_cast<int>(Settings::MultiplayerBackend::RoomFunNet);
+                ui->lobby_api_url->setEnabled(interface_enabled && room_fun_net);
+                ui->restore_default_lobby_api->setEnabled(interface_enabled && room_fun_net);
+            });
 }
 
 void ConfigureNetwork::OnRestoreDefaultLobbyApi() {

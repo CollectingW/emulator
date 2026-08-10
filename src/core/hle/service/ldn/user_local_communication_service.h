@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include <memory>
+
 #include "core/hle/service/cmif_types.h"
 #include "core/hle/service/kernel_helpers.h"
-#include "core/hle/service/ldn/lan_discovery.h"
 #include "core/hle/service/ldn/ldn_types.h"
+#include "core/hle/service/ldn/network_client.h"
 #include "core/hle/service/service.h"
 
 namespace Core {
@@ -97,17 +99,12 @@ private:
     Result Initialize2(u32 version, ClientProcessId aruid);
 
 private:
-    /// Callback to parse and handle a received LDN packet.
-    void OnLDNPacketReceived(const Network::LDNPacket& packet);
     void OnEventFired();
 
     KernelHelpers::ServiceContext service_context;
     Kernel::KEvent* state_change_event;
     Network::RoomNetwork& room_network;
-    LANDiscovery lan_discovery;
-
-    // Callback identifier for the OnLDNPacketReceived event.
-    Network::RoomMember::CallbackHandle<Network::LDNPacket> ldn_packet_received;
+    std::unique_ptr<INetworkClient> network_client;
 
     bool is_initialized{};
     Protocol current_protocol{Protocol::NX};

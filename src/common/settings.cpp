@@ -33,6 +33,7 @@ namespace Settings {
 
 SETTING(AppletMode, false);
 SETTING(AudioEngine, false);
+SETTING(MultiplayerBackend, false);
 SETTING(bool, false);
 SETTING(int, false);
 SETTING(std::string, false);

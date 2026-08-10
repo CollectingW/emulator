@@ -23,6 +23,9 @@ class System;
 namespace Network {
 class SocketBase;
 class Socket;
+namespace RyuLdn {
+class RyuLdnClient;
+}
 } // namespace Network
 
 namespace Service::Sockets {
@@ -230,6 +233,7 @@ private:
     std::mutex fd_table_mutex; // Protects access to the file_descriptors array
 
     Network::RoomNetwork& room_network;
+    Network::RyuLdn::RyuLdnClient& ryuldn_client;
 
     /// Callback to parse and handle a received wifi packet.
     void OnProxyPacketReceived(const Network::ProxyPacket& packet);

@@ -89,6 +89,7 @@
 #include "core/tools/freezer.h"
 #include "core/tools/renderdoc.h"
 #include "hid_core/hid_core.h"
+#include "core/internal_network/ryuldn/ryuldn_client.h"
 #include "network/network.h"
 #include "video_core/host1x/host1x.h"
 #include "video_core/renderer_base.h"
@@ -162,7 +163,8 @@ FileSys::VirtualFile GetGameFileFromPath(const FileSys::VirtualFilesystem& vfs,
 
 struct System::Impl {
     explicit Impl(System& system)
-        : kernel{system}, fs_controller{system}, hid_core{}, room_network{}, cpu_manager{system},
+        : kernel{system}, fs_controller{system}, hid_core{}, room_network{}, ryuldn_client{},
+          cpu_manager{system},
           reporter{system}, applet_manager{system}, frontend_applets{system}, profile_manager{} {}
 
     void Initialize(System& system) {
@@ -567,6 +569,7 @@ struct System::Impl {
     std::optional<AudioCore::AudioCore> audio_core;
     Core::HID::HIDCore hid_core;
     Network::RoomNetwork room_network;
+    Network::RyuLdn::RyuLdnClient ryuldn_client;
 
     CpuManager cpu_manager;
     std::atomic_bool is_powered_on{};
@@ -1057,6 +1060,14 @@ Network::RoomNetwork& System::GetRoomNetwork() {
 
 const Network::RoomNetwork& System::GetRoomNetwork() const {
     return impl->room_network;
+}
+
+Network::RyuLdn::RyuLdnClient& System::GetRyuLdnClient() {
+    return impl->ryuldn_client;
+}
+
+const Network::RyuLdn::RyuLdnClient& System::GetRyuLdnClient() const {
+    return impl->ryuldn_client;
 }
 
 Tools::RenderdocAPI& System::GetRenderdocAPI() {
