@@ -7240,10 +7240,7 @@ bool GMainWindow::NextendoByamlRequired(u64 title_id) const {
 }
 
 bool GMainWindow::NextendoByamlDownloadEnabled() const {
-    // Disabled for now: the server-side BCAT data itself is wrong (confirmed on both citron
-    // and Ryujinx), so downloading just replaces one incorrect copy with another. Re-enable
-    // once that's fixed upstream.
-    return false;
+    return true;
 }
 
 bool GMainWindow::NextendoByamlInstalled(u64 title_id) const {
