@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <QMainWindow>
 #include <QMessageBox>
 #include <QPushButton>
@@ -160,6 +161,7 @@ public:
     bool NextendoByamlInstalled(u64 title_id) const;
     bool NextendoByamlSkipped(u64 title_id) const;
     bool NextendoByamlDownloadEnabled() const;
+    void InstallSsbuSkylineMods(u64 program_id);
     bool IsConfiguring() const {
         return m_is_configuring;
     }
@@ -497,6 +499,15 @@ private:
     void NextendoByamlMarkSkipped(u64 title_id) const;
     bool NextendoByamlDownload(u64 title_id);
     void RunNextendoByamlDownloadWithProgress(u64 title_id);
+
+    struct SsbuModInstallOutcome {
+        std::vector<std::string> installed;
+        std::vector<std::pair<std::string, std::string>> failed; // {display_name, reason}
+        bool backup_made = false;
+        std::filesystem::path backup_path;
+    };
+    SsbuModInstallOutcome InstallSsbuSkylineModsBlocking(u64 program_id);
+    void RunSsbuSkylineModsInstallWithProgress(u64 program_id);
 
     bool user_flag_cmd_line = false;
     bool auto_paused = false;
