@@ -7278,23 +7278,23 @@ void GMainWindow::NextendoByamlMarkSkipped(u64 title_id) const {
 }
 
 namespace {
-std::filesystem::path NextendoByamlLastModifiedPath(const std::string& title_id_hex) {
+std::filesystem::path NextendoByamlHashPath(const std::string& title_id_hex) {
     return Common::FS::GetCitronPath(Common::FS::CitronPath::NANDDir) /
-           fmt::format("system/save/bcat/{}/.nextendo_last_modified", title_id_hex);
+           fmt::format("system/save/bcat/{}/.nextendo_bcat_hash", title_id_hex);
 }
 
-std::string NextendoByamlReadLastModified(const std::string& title_id_hex) {
-    std::ifstream file{NextendoByamlLastModifiedPath(title_id_hex)};
+std::string NextendoByamlReadHash(const std::string& title_id_hex) {
+    std::ifstream file{NextendoByamlHashPath(title_id_hex)};
     std::string value;
     std::getline(file, value);
     return value;
 }
 
-void NextendoByamlWriteLastModified(const std::string& title_id_hex, const std::string& value) {
+void NextendoByamlWriteHash(const std::string& title_id_hex, const std::string& value) {
     if (value.empty()) {
         return;
     }
-    std::ofstream file{NextendoByamlLastModifiedPath(title_id_hex)};
+    std::ofstream file{NextendoByamlHashPath(title_id_hex)};
     if (file) {
         file << value;
     }
@@ -7366,15 +7366,25 @@ bool GMainWindow::NextendoByamlDownload(u64 title_id) {
         return false;
     }
     const auto title_id_hex = fmt::format("{:016X}", title_id);
-    const auto stored_last_modified = NextendoByamlReadLastModified(title_id_hex);
-    auto check = WebService::NextendoApi::DownloadBcatSeedIfNewer(title_id_hex,
-                                                                   stored_last_modified);
-    if (check.not_modified) {
-        // Already have the current rotation schedule; nothing to redo.
-        return NextendoByamlInstalled(title_id);
-    }
-    if (check.zip_bytes.empty()) {
+
+    // Only this title ID's server-side BCAT content is kept current; fetch it for all variants.
+    constexpr u64 kCanonicalByamlTitleId = 0x0100f8f0000a2000ULL;
+    const auto fetch_title_id_hex = fmt::format("{:016X}", kCanonicalByamlTitleId);
+
+    // Always fetch the full seed and compare its hash locally, rather than trusting the
+    // server's Last-Modified/304 response as the sole freshness signal — that path could get
+    // stuck serving a stale rotation schedule if the server's conditional-GET handling doesn't
+    // track content changes precisely. Ryujinx-Nextendo hits the same server and takes the same
+    // always-fetch-and-hash approach for exactly this reason.
+    const auto zip_bytes = WebService::NextendoApi::DownloadBcatSeed(fetch_title_id_hex);
+    if (zip_bytes.empty()) {
         return false;
+    }
+
+    const auto server_hash = WebService::NextendoApi::HashBcatSeedHex(zip_bytes);
+    if (server_hash == NextendoByamlReadHash(title_id_hex) && NextendoByamlInstalled(title_id)) {
+        // Already have the current rotation schedule; nothing to redo.
+        return true;
     }
 
     const auto tmp_path = Common::FS::GetCitronPath(Common::FS::CitronPath::CacheDir) /
@@ -7384,8 +7394,8 @@ bool GMainWindow::NextendoByamlDownload(u64 title_id) {
         if (!out) {
             return false;
         }
-        out.write(reinterpret_cast<const char*>(check.zip_bytes.data()),
-                  static_cast<std::streamsize>(check.zip_bytes.size()));
+        out.write(reinterpret_cast<const char*>(zip_bytes.data()),
+                  static_cast<std::streamsize>(zip_bytes.size()));
     }
 
     const auto dest_path =
@@ -7399,7 +7409,7 @@ bool GMainWindow::NextendoByamlDownload(u64 title_id) {
     const bool ok = ExtractZipToDirectory(tmp_path, dest_path);
     std::filesystem::remove(tmp_path);
     if (ok) {
-        NextendoByamlWriteLastModified(title_id_hex, check.last_modified);
+        NextendoByamlWriteHash(title_id_hex, server_hash);
     }
     return ok;
 #else
