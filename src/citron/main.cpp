@@ -2025,7 +2025,16 @@ void GMainWindow::ConnectMenuEvents() {
             nextendo_controller->SignIn();
             return;
         }
-        NextendoAccountDialog(nextendo_controller, *system, this).exec();
+        // Pressing the hotkey again while the dialog is already open closes it instead of
+        // stacking another one on top.
+        if (nextendo_account_dialog_instance) {
+            nextendo_account_dialog_instance->close();
+            return;
+        }
+        NextendoAccountDialog dialog(nextendo_controller, *system, this);
+        nextendo_account_dialog_instance = &dialog;
+        dialog.exec();
+        nextendo_account_dialog_instance = nullptr;
     });
     connect(nextendo_toast, &NextendoToast::clicked, this, [this](NextendoToast::Kind kind) {
         if (kind != NextendoToast::Kind::Request || !Common::NextendoAccount::IsLinked()) {

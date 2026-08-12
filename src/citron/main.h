@@ -462,6 +462,7 @@ private:
     NextendoController* nextendo_controller = nullptr;
     NextendoToast* nextendo_toast = nullptr;
     QDialog* nextendo_signin_dialog = nullptr;
+    NextendoAccountDialog* nextendo_account_dialog_instance = nullptr;
     OverlayDialog* shutdown_dialog{};
     PerformanceOverlay* performance_overlay{};
     MultiplayerRoomOverlay* multiplayer_room_overlay{};
