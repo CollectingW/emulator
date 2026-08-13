@@ -67,7 +67,11 @@ function(citron_build_clangtron_ffmpeg)
         set(_install_dir_win "${_install_dir}")
         set(_clangtron_tool_dir_msys "${_clangtron_tool_dir}")
         set(_c_compiler_win "${CMAKE_C_COMPILER}")
-        set(_rc_compiler_win "${CMAKE_RC_COMPILER}")
+        if(CMAKE_RC_COMPILER AND NOT CMAKE_RC_COMPILER STREQUAL "")
+            set(_rc_compiler_win "${CMAKE_RC_COMPILER}")
+        else()
+            set(_rc_compiler_win "")
+        endif()
         set(_install_dir_msys "${_install_dir}")
     endif()
 
@@ -75,6 +79,7 @@ function(citron_build_clangtron_ffmpeg)
     file(MAKE_DIRECTORY "${_build_dir}" "${_install_dir}")
 
     set(_ffmpeg_extra_cflags "")
+    set(_ffmpeg_vulkan_flags "")
     if (Vulkan-Headers_SOURCE_DIR)
         if(CMAKE_HOST_WIN32)
             execute_process(
@@ -88,6 +93,9 @@ function(citron_build_clangtron_ffmpeg)
             set(_vk_headers_win "${Vulkan-Headers_SOURCE_DIR}")
         endif()
         set(_ffmpeg_extra_cflags "${_ffmpeg_extra_cflags} -I${_vk_headers_win}/include")
+        set(_ffmpeg_vulkan_flags "--enable-vulkan" "--enable-hwaccel=h264_vulkan")
+    else()
+        set(_ffmpeg_vulkan_flags "--disable-vulkan")
     endif()
 
     if (DEFINED CLANGTRON_FFMPEG_EXTRA_CFLAGS AND NOT "${CLANGTRON_FFMPEG_EXTRA_CFLAGS}" STREQUAL "")
@@ -117,7 +125,6 @@ function(citron_build_clangtron_ffmpeg)
         "--nm=llvm-nm"
         "--strip=llvm-strip"
         "--ranlib=llvm-ranlib"
-        "--windres='${_rc_compiler_win}'"
         "--prefix='${_install_dir_win}'"
         "--disable-pthreads"
         "--enable-w32threads"
@@ -138,6 +145,11 @@ function(citron_build_clangtron_ffmpeg)
         "--enable-dxva2"
         "--enable-d3d11va"
     )
+    list(APPEND _ffmpeg_configure_command ${_ffmpeg_vulkan_flags})
+
+    if(_rc_compiler_win AND NOT _rc_compiler_win STREQUAL "")
+        list(APPEND _ffmpeg_configure_command "--windres='${_rc_compiler_win}'")
+    endif()
 
     if(NOT CMAKE_HOST_WIN32)
         list(APPEND _ffmpeg_configure_command "--enable-cross-compile" "--cross-prefix=${_clangtron_tool_dir_msys}/x86_64-w64-mingw32-")
@@ -160,9 +172,12 @@ function(citron_build_clangtron_ffmpeg)
             "${_install_dir}/lib/libavcodec.a"
             "${_install_dir}/lib/libavutil.a"
             "${_install_dir}/lib/libavformat.a"
-        COMMAND "${BASH_PROGRAM}" -lc "${_ffmpeg_configure_command}"
-        COMMAND "${BASH_PROGRAM}" -lc "export PATH='${_clangtron_tool_dir_msys}':$PATH && '${MAKE_PROGRAM}' -j${_ffmpeg_jobs}"
-        COMMAND "${BASH_PROGRAM}" -lc "export PATH='${_clangtron_tool_dir_msys}':$PATH && '${MAKE_PROGRAM}' install"
+        COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
+            "${BASH_PROGRAM}" -lc "${_ffmpeg_configure_command}"
+        COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
+            "${BASH_PROGRAM}" -lc "export PATH='${_clangtron_tool_dir_msys}':$PATH && '${MAKE_PROGRAM}' -j${_ffmpeg_jobs}"
+        COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
+            "${BASH_PROGRAM}" -lc "export PATH='${_clangtron_tool_dir_msys}':$PATH && '${MAKE_PROGRAM}' install"
         COMMAND "${CMAKE_COMMAND}" -E touch "${_build_stamp}"
         DEPENDS "${CMAKE_CURRENT_LIST_FILE}" "${_source_dir}/configure"
         WORKING_DIRECTORY "${_build_dir_win}"

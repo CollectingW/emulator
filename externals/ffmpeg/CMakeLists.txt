@@ -198,7 +198,11 @@ if (NOT WIN32 AND NOT ANDROID)
             file(REMOVE "${FFmpeg_MAKEFILE}")
         endif()
     endif()
-    file(WRITE "${FFmpeg_SENTINEL_FILE}" "${FFmpeg_CURRENT_FLAGS}")
+    # Sentinel write moved into configure custom command below so it only
+    # persists after a successful configure run (failed runs leave the previous
+    # sentinel unchanged, forcing re-invalidation on the next cmake --build).
+    set(FFmpeg_SENTINEL_TMP "${FFmpeg_BUILD_DIR}/.citron_ffmpeg_configure_flags.tmp")
+    file(WRITE "${FFmpeg_SENTINEL_TMP}" "${FFmpeg_CURRENT_FLAGS}")
     add_custom_command(
         OUTPUT
             ${FFmpeg_MAKEFILE}
@@ -220,6 +224,8 @@ if (NOT WIN32 AND NOT ANDROID)
                 --cxx="${FFmpeg_CXX}"
                 ${FFmpeg_HWACCEL_FLAGS}
                 ${FFmpeg_CROSS_COMPILE_FLAGS}
+        COMMAND
+            "${CMAKE_COMMAND}" -E copy "${FFmpeg_SENTINEL_TMP}" "${FFmpeg_SENTINEL_FILE}"
         WORKING_DIRECTORY
             ${FFmpeg_BUILD_DIR}
     )

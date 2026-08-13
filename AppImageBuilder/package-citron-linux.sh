@@ -123,6 +123,11 @@ EXTRA_LIBS=""
 GAMEMODE_LIB="$(ldconfig -p 2>/dev/null | awk '/libgamemode\.so/ {print $NF; exit}')"
 [ -n "$GAMEMODE_LIB" ] && EXTRA_LIBS="$EXTRA_LIBS $GAMEMODE_LIB"
 
+# libLLVM is a hard dep of radeonsi_drv_video.so but is NOT in quick-sharun's default
+# ANYLINUX_DO_NOT_LOAD_LIBS exclusion list. Append it so lookup falls through to the host.
+# Same for libudev.so* - must use host system's udev daemon protocol.
+export ANYLINUX_DO_NOT_LOAD_LIBS="libLLVM.so*:libudev.so*"
+
 # shellcheck disable=SC2086
 ./quick-sharun "${DESTDIR}/usr/bin/citron"* $EXTRA_LIBS
 _appdir="${PWD}/AppDir"
@@ -169,6 +174,8 @@ find "${_appdir}" -name 'libxcb-glx.so*'             -delete 2>/dev/null || true
 # libqgtk3.so: Qt GTK3 platform theme. Purged to force Qt to use D-Bus libqxdgdesktopportal.so,
 # preventing host GTK module crashes on GTK desktops (Linux Mint, Ubuntu GNOME, XFCE).
 find "${_appdir}" -name 'libqgtk3.so'                -delete 2>/dev/null || true
+# use host libudev
+find "${_appdir}" -name 'libudev.so.*'               -delete 2>/dev/null || true
 
 # Sanity check: confirm citron and the bundled Vulkan loader don't have an
 # unresolved dependency, and confirm which loader actually shipped. Runs
@@ -216,6 +223,8 @@ fi
 sed -i '/^SHARUN_ALLOW_SYS_VKICD=/d' ./AppDir/.env 2>/dev/null || true
 printf 'SHARUN_ALLOW_SYS_VKICD=1\n' >> ./AppDir/.env
 
+
+
 # PGO profile data next to the running AppImage on exit ($APPIMAGE is
 # exported by sharun's AppRun at runtime). Can't live in .env: that file is
 # parsed by a plain key=value dotenv reader and can't execute
@@ -227,6 +236,61 @@ cat <<-'HOOK_EOF' > ./AppDir/bin/01-llvm-profile.hook
 export LLVM_PROFILE_FILE="$(dirname "$APPIMAGE")/default-%p.profraw"
 HOOK_EOF
 chmod +x ./AppDir/bin/01-llvm-profile.hook
+
+# hwaccel hook: VAAPI, VDPAU, Vulkan video decode.
+#
+# VAAPI: libva.so has "/usr/lib/dri" compiled in as its default driver path
+# (Arch convention). Works on Arch/CachyOS and some Debian/Ubuntu hosts.
+# Fedora keeps drivers under /usr/lib64/dri only — hardcoded lookup finds
+# nothing there. LIBVA_DRIVERS_PATH is libva's own override; probe common
+# distro paths and set it to whichever one has the actual driver.
+#
+# VDPAU: without a GLX context, libvdpau defaults to "nvidia" regardless of
+# hardware. Force VDPAU_DRIVER=radeonsi on AMD hosts; skip on NVIDIA
+# (proprietary driver provides correct GLX-based detection independently).
+#
+# Vulkan video: RADV decode extensions are off by default on most Mesa/HW
+# combos. Set both RADV_PERFTEST and RADV_EXPERIMENTAL for forward/backward
+# compat (unknown names are silently ignored).
+cat <<-'HOOK_EOF' > ./AppDir/bin/02-hwaccel.hook
+#!/bin/sh
+if [ -z "${LIBVA_DRIVERS_PATH:-}" ]; then
+    for _d in /usr/lib64/dri /usr/lib/x86_64-linux-gnu/dri /usr/lib/dri /run/opengl-driver/lib/dri; do
+        if [ -e "${_d}/radeonsi_drv_video.so" ] || [ -e "${_d}/iHD_drv_video.so" ] || [ -e "${_d}/nouveau_drv_video.so" ]; then
+            export LIBVA_DRIVERS_PATH="${_d}"
+            break
+        fi
+    done
+fi
+
+case ",${RADV_PERFTEST:-}," in
+    *,video_decode,*) ;;
+    ,,) export RADV_PERFTEST=video_decode ;;
+    *) export RADV_PERFTEST="${RADV_PERFTEST},video_decode" ;;
+esac
+export RADV_EXPERIMENTAL="${RADV_EXPERIMENTAL:+${RADV_EXPERIMENTAL},}video_decode"
+
+if [ -z "${VDPAU_DRIVER:-}" ]; then
+    _nvidia_vdpau=""
+    for _d in /usr/lib64 /usr/lib/x86_64-linux-gnu /usr/lib /usr/lib/vdpau; do
+        if [ -e "${_d}/vdpau/libvdpau_nvidia.so" ] || [ -e "${_d}/libvdpau_nvidia.so" ]; then
+            _nvidia_vdpau=1
+            break
+        fi
+    done
+    if [ -z "${_nvidia_vdpau}" ]; then
+        _amd_vdpau=""
+        for _d in /usr/lib64/vdpau /usr/lib/x86_64-linux-gnu/vdpau /usr/lib/vdpau /usr/lib64 /usr/lib; do
+            if [ -e "${_d}/libvdpau_radeonsi.so" ]; then
+                _amd_vdpau=1
+                break
+            fi
+        done
+        [ -z "${_amd_vdpau}" ] || export VDPAU_DRIVER=radeonsi
+    fi
+fi
+HOOK_EOF
+chmod +x ./AppDir/bin/02-hwaccel.hook
 
 # Force XCB (X11/Xwayland) platform on GNOME desktops.
 # GNOME 48 has a Mutter compositor bug where native Wayland Qt windows render
