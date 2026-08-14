@@ -126,7 +126,12 @@ GAMEMODE_LIB="$(ldconfig -p 2>/dev/null | awk '/libgamemode\.so/ {print $NF; exi
 # libLLVM is a hard dep of radeonsi_drv_video.so but is NOT in quick-sharun's default
 # ANYLINUX_DO_NOT_LOAD_LIBS exclusion list. Append it so lookup falls through to the host.
 # Same for libudev.so* - must use host system's udev daemon protocol.
-export ANYLINUX_DO_NOT_LOAD_LIBS="libLLVM.so*:libudev.so*"
+# Append to any caller-provided value rather than overwriting it.
+if [ -n "${ANYLINUX_DO_NOT_LOAD_LIBS:-}" ]; then
+    export ANYLINUX_DO_NOT_LOAD_LIBS="${ANYLINUX_DO_NOT_LOAD_LIBS}:libLLVM.so*:libudev.so*"
+else
+    export ANYLINUX_DO_NOT_LOAD_LIBS="libLLVM.so*:libudev.so*"
+fi
 
 # shellcheck disable=SC2086
 ./quick-sharun "${DESTDIR}/usr/bin/citron"* $EXTRA_LIBS
@@ -193,14 +198,17 @@ if [ "${PACKAGE_DIAGNOSTICS:-1}" = "1" ]; then
     fi
 fi
 
-# qt.conf next to the real citron binary in shared/bin/, not shared/lib/.
+# qt.conf next to the real citron binary in shared/bin/, not usr/bin/.
 #
 # CPM Qt's libQt6Core.so.6 has a baked-in INSTALL_PREFIX (the CPM cache path)
 # that works on the build machine but not anywhere else without an explicit
-# qt.conf overriding it. Qt looks for qt.conf next to the running
-# executable — sharun relocates the real citron binary to
-# AppDir/shared/bin/citron — that is what Qt sees as its own executable path
-# at runtime, so qt.conf goes there.
+# qt.conf overriding it. Qt looks for qt.conf next to the running executable.
+# The AppImage launcher chain is:
+#   AppRun (sharun) -> AppDir/usr/bin/citron (citron.sh wrapper)
+#                   -> AppDir/usr/bin/citron.bin (symlink or copy by sharun into
+#                      AppDir/shared/bin/citron — the actual ELF Qt inspects)
+# Qt resolves its own executable path via /proc/self/exe, which points to
+# the real ELF in AppDir/shared/bin/. qt.conf must therefore live there.
 mkdir -p ./AppDir/shared/bin
 cat > ./AppDir/shared/bin/qt.conf << 'QTCONF_EOF'
 [Paths]
@@ -256,7 +264,8 @@ cat <<-'HOOK_EOF' > ./AppDir/bin/02-hwaccel.hook
 #!/bin/sh
 if [ -z "${LIBVA_DRIVERS_PATH:-}" ]; then
     for _d in /usr/lib64/dri /usr/lib/x86_64-linux-gnu/dri /usr/lib/dri /run/opengl-driver/lib/dri; do
-        if [ -e "${_d}/radeonsi_drv_video.so" ] || [ -e "${_d}/iHD_drv_video.so" ] || [ -e "${_d}/nouveau_drv_video.so" ]; then
+        if [ -e "${_d}/radeonsi_drv_video.so" ] || [ -e "${_d}/iHD_drv_video.so" ] \
+            || [ -e "${_d}/nouveau_drv_video.so" ] || [ -e "${_d}/nvidia_drv_video.so" ]; then
             export LIBVA_DRIVERS_PATH="${_d}"
             break
         fi
