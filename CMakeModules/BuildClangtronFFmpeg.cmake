@@ -36,11 +36,25 @@ function(citron_build_clangtron_ffmpeg)
     endif()
     
     get_filename_component(_clangtron_tool_dir "${CMAKE_C_COMPILER}" DIRECTORY)
+    set(_rc_compiler_abs "")
+    if(CMAKE_RC_COMPILER AND NOT CMAKE_RC_COMPILER STREQUAL "")
+        if(IS_ABSOLUTE "${CMAKE_RC_COMPILER}" AND EXISTS "${CMAKE_RC_COMPILER}")
+            get_filename_component(_rc_compiler_abs "${CMAKE_RC_COMPILER}" REALPATH)
+        else()
+            find_program(_rc_compiler_abs NAMES "${CMAKE_RC_COMPILER}"
+                HINTS "${_clangtron_tool_dir}")
+        endif()
+    endif()
     
     if(CMAKE_HOST_WIN32)
+        set(_clangtron_ffmpeg_cygpath_command
+            "cygpath -am '${_source_dir}' && cygpath -am '${_build_dir}' && cygpath -am '${_install_dir}' && cygpath -au '${_clangtron_tool_dir}' && cygpath -am '${CMAKE_C_COMPILER}'")
+        if(_rc_compiler_abs)
+            string(APPEND _clangtron_ffmpeg_cygpath_command " && cygpath -am '${_rc_compiler_abs}'")
+        endif()
         execute_process(
             COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
-                "${BASH_PROGRAM}" -lc "cygpath -am '${_source_dir}' && cygpath -am '${_build_dir}' && cygpath -am '${_install_dir}' && cygpath -au '${_clangtron_tool_dir}' && cygpath -am '${CMAKE_C_COMPILER}' && cygpath -am '${CMAKE_RC_COMPILER}'"
+                "${BASH_PROGRAM}" -lc "${_clangtron_ffmpeg_cygpath_command}"
             OUTPUT_VARIABLE _clangtron_ffmpeg_paths
             OUTPUT_STRIP_TRAILING_WHITESPACE
             COMMAND_ERROR_IS_FATAL ANY
@@ -51,7 +65,11 @@ function(citron_build_clangtron_ffmpeg)
         list(GET _clangtron_ffmpeg_paths 2 _install_dir_win)
         list(GET _clangtron_ffmpeg_paths 3 _clangtron_tool_dir_msys)
         list(GET _clangtron_ffmpeg_paths 4 _c_compiler_win)
-        list(GET _clangtron_ffmpeg_paths 5 _rc_compiler_win)
+        if(_rc_compiler_abs)
+            list(GET _clangtron_ffmpeg_paths 5 _rc_compiler_win)
+        else()
+            set(_rc_compiler_win "")
+        endif()
 
         # MSYS paths for bash commands (cd, mv) — separate from Windows mixed paths
         execute_process(
@@ -67,8 +85,8 @@ function(citron_build_clangtron_ffmpeg)
         set(_install_dir_win "${_install_dir}")
         set(_clangtron_tool_dir_msys "${_clangtron_tool_dir}")
         set(_c_compiler_win "${CMAKE_C_COMPILER}")
-        if(CMAKE_RC_COMPILER AND NOT CMAKE_RC_COMPILER STREQUAL "")
-            set(_rc_compiler_win "${CMAKE_RC_COMPILER}")
+        if(_rc_compiler_abs)
+            set(_rc_compiler_win "${_rc_compiler_abs}")
         else()
             set(_rc_compiler_win "")
         endif()
@@ -80,17 +98,27 @@ function(citron_build_clangtron_ffmpeg)
 
     set(_ffmpeg_extra_cflags "")
     set(_ffmpeg_vulkan_flags "")
-    if (Vulkan-Headers_SOURCE_DIR)
+    set(_vk_headers_source "")
+    foreach(_vk_headers_candidate
+            "${Vulkan-Headers_SOURCE_DIR}"
+            "${Vulkan_Headers_SOURCE_DIR}"
+            "$ENV{MSYSTEM_PREFIX}")
+        if(_vk_headers_candidate AND EXISTS "${_vk_headers_candidate}/include/vulkan/vulkan.h")
+            set(_vk_headers_source "${_vk_headers_candidate}")
+            break()
+        endif()
+    endforeach()
+    if (_vk_headers_source)
         if(CMAKE_HOST_WIN32)
             execute_process(
                 COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
-                    "${BASH_PROGRAM}" -lc "cygpath -am '${Vulkan-Headers_SOURCE_DIR}'"
+                    "${BASH_PROGRAM}" -lc "cygpath -am '${_vk_headers_source}'"
                 OUTPUT_VARIABLE _vk_headers_win
                 OUTPUT_STRIP_TRAILING_WHITESPACE
                 COMMAND_ERROR_IS_FATAL ANY
             )
         else()
-            set(_vk_headers_win "${Vulkan-Headers_SOURCE_DIR}")
+            set(_vk_headers_win "${_vk_headers_source}")
         endif()
         set(_ffmpeg_extra_cflags "${_ffmpeg_extra_cflags} -I${_vk_headers_win}/include")
         set(_ffmpeg_vulkan_flags "--enable-vulkan" "--enable-hwaccel=h264_vulkan" "--enable-hwaccel=vp9_vulkan")
@@ -101,19 +129,6 @@ function(citron_build_clangtron_ffmpeg)
     if (DEFINED CLANGTRON_FFMPEG_EXTRA_CFLAGS AND NOT "${CLANGTRON_FFMPEG_EXTRA_CFLAGS}" STREQUAL "")
         set(_ffmpeg_extra_cflags "${_ffmpeg_extra_cflags} ${CLANGTRON_FFMPEG_EXTRA_CFLAGS}")
     endif()
-
-    # Flag sentinel: if cached build's flags differ from current, remove stamp so ninja rebuilds.
-    set(_ffmpeg_flags_sentinel "${_install_dir}/.citron-clangtron-extra-cflags")
-    set(_ffmpeg_flags_sentinel_content "")
-    if (EXISTS "${_ffmpeg_flags_sentinel}")
-        file(READ "${_ffmpeg_flags_sentinel}" _ffmpeg_flags_sentinel_content)
-        string(STRIP "${_ffmpeg_flags_sentinel_content}" _ffmpeg_flags_sentinel_content)
-    endif()
-    if (EXISTS "${_build_stamp}" AND NOT _ffmpeg_flags_sentinel_content STREQUAL "${_ffmpeg_extra_cflags}")
-        message(STATUS "[FFmpeg/clangtron] Cached build's recorded flags don't match the current build's; rebuilding")
-        file(REMOVE "${_build_stamp}")
-    endif()
-    file(WRITE "${_ffmpeg_flags_sentinel}" "${_ffmpeg_extra_cflags}")
 
     set(_ffmpeg_configure_command
         "export PATH='${_clangtron_tool_dir_msys}':$PATH &&"
@@ -139,7 +154,7 @@ function(citron_build_clangtron_ffmpeg)
         "--disable-vdpau"
         "--disable-iconv"
         "--enable-decoder=h264,vp8,vp9,aac,mp3,opus,flac"
-        "--enable-demuxer=mp4,matroska,ogg"
+        "--enable-demuxer=mov,matroska,ogg"
         "--enable-filter=yadif,scale,aresample"
         "--enable-protocol=file"
         "--enable-dxva2"
@@ -163,6 +178,21 @@ function(citron_build_clangtron_ffmpeg)
 
     string(JOIN " " _ffmpeg_configure_command ${_ffmpeg_configure_command})
 
+    # Rebuild when any configure argument changes.  Stage the new value now,
+    # but only promote it after configure, build, and install all succeed.
+    set(_ffmpeg_flags_sentinel "${_install_dir}/.citron-clangtron-configure-command")
+    set(_ffmpeg_flags_sentinel_staged "${_build_dir}/.citron-clangtron-configure-command")
+    set(_ffmpeg_flags_sentinel_content "")
+    if (EXISTS "${_ffmpeg_flags_sentinel}")
+        file(READ "${_ffmpeg_flags_sentinel}" _ffmpeg_flags_sentinel_content)
+        string(STRIP "${_ffmpeg_flags_sentinel_content}" _ffmpeg_flags_sentinel_content)
+    endif()
+    if (EXISTS "${_build_stamp}" AND NOT _ffmpeg_flags_sentinel_content STREQUAL "${_ffmpeg_configure_command}")
+        message(STATUS "[FFmpeg/clangtron] Configure command changed; rebuilding FFmpeg")
+        file(REMOVE "${_build_stamp}")
+    endif()
+    file(WRITE "${_ffmpeg_flags_sentinel_staged}" "${_ffmpeg_configure_command}")
+
     add_custom_command(
         OUTPUT "${_build_stamp}"
         BYPRODUCTS
@@ -178,6 +208,8 @@ function(citron_build_clangtron_ffmpeg)
             "${BASH_PROGRAM}" -lc "export PATH='${_clangtron_tool_dir_msys}':$PATH && '${MAKE_PROGRAM}' -j${_ffmpeg_jobs}"
         COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
             "${BASH_PROGRAM}" -lc "export PATH='${_clangtron_tool_dir_msys}':$PATH && '${MAKE_PROGRAM}' install"
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${_ffmpeg_flags_sentinel_staged}" "${_ffmpeg_flags_sentinel}"
         COMMAND "${CMAKE_COMMAND}" -E touch "${_build_stamp}"
         DEPENDS "${CMAKE_CURRENT_LIST_FILE}" "${_source_dir}/configure"
         WORKING_DIRECTORY "${_build_dir_win}"

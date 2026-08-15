@@ -161,8 +161,8 @@ fi
 # libqgtk3.so: Qt GTK3 platform theme. Purged to force Qt to use D-Bus libqxdgdesktopportal.so,
 # preventing host GTK module crashes on GTK desktops (Linux Mint, Ubuntu GNOME, XFCE).
 find "${_appdir}" -name 'libqgtk3.so'                -delete 2>/dev/null || true
-# Keep quick-sharun's bundled loader as the portable default. A runtime hook
-# below provides an explicit host-loader escape hatch before Citron starts.
+# quick-sharun's bundled Vulkan loader is the only loader. Its ICD handling
+# appends compatible host NVIDIA ICDs when proprietary NVIDIA is installed.
 
 # Sanity check: confirm citron's final AppDir dependencies after cleanup.
 # Grep the build log for "ldd:" to find this.
@@ -222,10 +222,21 @@ chmod +x ./AppDir/bin/01-llvm-profile.hook
 cat <<-'HOOK_EOF' > ./AppDir/bin/02-hwaccel.hook
 #!/bin/sh
 _citron_has_amd=""
+_citron_has_intel=""
+_citron_has_legacy_intel=""
 _citron_has_proprietary_nvidia=""
 for _vendor in /sys/class/drm/card*/device/vendor; do
     case "$(cat "${_vendor}" 2>/dev/null)" in
         0x1002) _citron_has_amd=1 ;;
+        0x8086)
+            _citron_has_intel=1
+            # iHD starts at Intel Gen8.  Earlier generations need i965.
+            case "$(cat "$(dirname "${_vendor}")/device" 2>/dev/null)" in
+                0x00*|0x01[0-6]*|0x04*|0x0a*|0x0c*|0x0d*|0x0f*|0x2[!2]*)
+                    _citron_has_legacy_intel=1
+                    ;;
+            esac
+            ;;
         0x10de)
             # NVK/Nouveau also reports NVIDIA's PCI vendor ID.  Treat it as
             # proprietary only when the host exposes NVIDIA's actual driver.
@@ -246,11 +257,30 @@ for _vendor in /sys/class/drm/card*/device/vendor; do
     esac
 done
 
-# Open drivers use the bundled closure.  Proprietary NVIDIA remains host-side
-# because its ICD and video drivers must match the installed kernel module.
+# Use bundled VAAPI only when it has a driver for an installed open GPU.
+# Proprietary NVIDIA remains host-side because its video driver must match the
+# installed kernel module.  Otherwise let the host-directory fallback choose.
 if [ -z "${LIBVA_DRIVERS_PATH:-}" ]; then
-    if [ -z "${_citron_has_proprietary_nvidia}" ] && [ -d "${APPDIR}/lib/dri" ]; then
+    _citron_vaapi_driver=""
+    if [ -n "${_citron_has_amd}" ] \
+        && [ -n "${APPDIR:-}" ] \
+        && [ -e "${APPDIR}/lib/dri/radeonsi_drv_video.so" ]; then
+        _citron_vaapi_driver=radeonsi
+    elif [ -n "${_citron_has_intel}" ] \
+        && [ -n "${_citron_has_legacy_intel}" ] \
+        && [ -n "${APPDIR:-}" ] \
+        && [ -e "${APPDIR}/lib/dri/i965_drv_video.so" ]; then
+        _citron_vaapi_driver=i965
+    elif [ -n "${_citron_has_intel}" ] \
+        && [ -z "${_citron_has_legacy_intel}" ] \
+        && [ -n "${APPDIR:-}" ] \
+        && [ -e "${APPDIR}/lib/dri/iHD_drv_video.so" ]; then
+        _citron_vaapi_driver=iHD
+    fi
+
+    if [ -n "${_citron_vaapi_driver}" ]; then
         export LIBVA_DRIVERS_PATH="${APPDIR}/lib/dri"
+        [ -n "${LIBVA_DRIVER_NAME:-}" ] || export LIBVA_DRIVER_NAME="${_citron_vaapi_driver}"
     else
         for _d in /usr/lib64/dri /usr/lib/x86_64-linux-gnu/dri /usr/lib/dri /run/opengl-driver/lib/dri; do
             for _va in "${_d}"/*_drv_video.so; do
@@ -260,14 +290,6 @@ if [ -z "${LIBVA_DRIVERS_PATH:-}" ]; then
             done
         done
     fi
-fi
-
-# On an AMD + NVK hybrid system libva otherwise chooses nouveau first, even
-# though only radeonsi supplies the usable bundled VAAPI implementation.
-if [ -z "${LIBVA_DRIVER_NAME:-}" ] && [ -n "${_citron_has_amd}" ] \
-    && [ -z "${_citron_has_proprietary_nvidia}" ] \
-    && [ -e "${APPDIR}/lib/dri/radeonsi_drv_video.so" ]; then
-    export LIBVA_DRIVER_NAME=radeonsi
 fi
 
 if [ -n "${_citron_has_amd}" ]; then
@@ -281,6 +303,7 @@ fi
 
 if [ -z "${VDPAU_DRIVER:-}" ] && [ -n "${_citron_has_amd}" ] \
     && [ -z "${_citron_has_proprietary_nvidia}" ] \
+    && [ -n "${APPDIR:-}" ] \
     && [ -e "${APPDIR}/lib/vdpau/libvdpau_radeonsi.so" ]; then
     export VDPAU_DRIVER=radeonsi
 fi

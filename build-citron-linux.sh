@@ -161,7 +161,7 @@ set -- "${_forward_args[@]}"
 
 # Existing CI workflow containers do not need Docker-in-Docker while the
 # workflow is being migrated to this entry point.
-if [[ -f /etc/arch-release && -f /.dockerenv ]]; then
+if [[ -f /etc/arch-release && ( -f /.dockerenv || -f /run/.containerenv ) ]]; then
     _inside_arch=1
     export CITRON_IN_ARCH_CONTAINER=1
 fi
@@ -179,10 +179,20 @@ if [[ "${_inside_arch}" != 1 && "${_container_mode}" != native ]]; then
         fi
         echo "[WARN] No container runtime found; using native build. Pass --container to require Arch." >&2
     else
-        _container_image="${CITRON_ARCH_IMAGE:-ghcr.io/pkgforge-dev/archlinux:latest}"
+        _container_image="${CITRON_ARCH_IMAGE:-ghcr.io/pkgforge-dev/archlinux@sha256:f6fc7e14b0612a355d7ab50efb3cc40010ba28e4766860bd238d313b308f190b}"
         _container_env=( -e CITRON_IN_ARCH_CONTAINER=1 )
         for _name in CLANG_VERSION BUILD_ROOT JOBS LTO_MODE PGO_MODE UNITY_BUILD DEVEL CPM_SOURCE_CACHE; do
-            [[ -z "${!_name+x}" ]] || _container_env+=( -e "${_name}" )
+            [[ -z "${!_name+x}" ]] && continue
+            if [[ "${_name}" = BUILD_ROOT || "${_name}" = CPM_SOURCE_CACHE ]]; then
+                _container_path="${!_name}"
+                if [[ "${_container_path}" = "${SCRIPT_DIR}" || "${_container_path}" = "${SCRIPT_DIR}"/* ]]; then
+                    _container_env+=( -e "${_name}=/workspace${_container_path#"${SCRIPT_DIR}"}" )
+                else
+                    echo "[WARN] Not forwarding ${_name}: ${_container_path} is outside the mounted checkout." >&2
+                fi
+            else
+                _container_env+=( -e "${_name}" )
+            fi
         done
         exec "${_container_runtime}" run --rm --init \
             "${_container_env[@]}" \
@@ -618,11 +628,16 @@ _setup_pacman() {
 
     # If in an arch container, use pkgforge's debloated packages
     if [[ "${CITRON_IN_ARCH_CONTAINER:-0}" = 1 && -f /etc/arch-release ]]; then
-        local debloated_helper
+        local debloated_helper debloated_helper_sha256
+        debloated_helper_sha256="9eec275b3bb8cb24a7d6743b0ba1cc612d372f172d700d6680f193a9e1ab08a9"
         debloated_helper="$(mktemp)"
         curl -fL --retry 30 \
             "https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/e9414c02f713359b551bcfa3832576d2992b13da/useful-tools/get-debloated-pkgs.sh" \
             -o "${debloated_helper}"
+        if ! printf '%s  %s\n' "${debloated_helper_sha256}" "${debloated_helper}" | sha256sum --check --status; then
+            rm -f "${debloated_helper}"
+            error "pkgforge debloated package helper checksum mismatch"
+        fi
         chmod +x "${debloated_helper}"
         info "Installing pkgforge debloated Mesa/LLVM runtime packages..."
         if [[ "$(uname -m)" = x86_64 ]]; then

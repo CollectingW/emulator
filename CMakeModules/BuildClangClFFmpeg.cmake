@@ -97,14 +97,17 @@ function(citron_build_clangcl_ffmpeg)
             OUTPUT_VARIABLE _vk_inc_win
             OUTPUT_STRIP_TRAILING_WHITESPACE
         )
-        if (_vk_inc_win)
+        if (_vk_inc_win MATCHES "^[A-Za-z]:/")
             set(_ffmpeg_extra_cflags "${_ffmpeg_extra_cflags} -I${_vk_inc_win}")
+            set(_ffmpeg_vulkan_flags
+                "--enable-vulkan"
+                "--enable-hwaccel=h264_vulkan"
+                "--enable-hwaccel=vp9_vulkan"
+            )
+        else()
+            message(STATUS "[FFmpeg/clang-cl] Vulkan include path conversion failed; disabling Vulkan hwaccel")
+            set(_ffmpeg_vulkan_flags "--disable-vulkan")
         endif()
-        set(_ffmpeg_vulkan_flags
-            "--enable-vulkan"
-            "--enable-hwaccel=h264_vulkan"
-            "--enable-hwaccel=vp9_vulkan"
-        )
     else()
         message(STATUS "[FFmpeg/clang-cl] Vulkan headers not found; disabling Vulkan hwaccel")
         set(_ffmpeg_vulkan_flags "--disable-vulkan")
@@ -175,7 +178,7 @@ function(citron_build_clangcl_ffmpeg)
         COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
             "${BASH_PROGRAM}" -lc "${_ffmpeg_configure_command}"
         COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
-            "${BASH_PROGRAM}" -lc "perl -0pi -e 's{\\Q${_source_dir_msys}\\E}{${_source_dir_win}}g; s{\\Q${_build_dir_msys}\\E}{${_build_dir_win}}g; s{^SRC_PATH\\s*:?=\\s*.*$}{SRC_PATH=${_source_dir_win}}mg; s{^(AR|AR_CMD)=llvm-lib}{$1=llvm-ar}mg' '${_build_dir_win}/ffbuild/config.mak' '${_build_dir_win}/ffbuild/config.sh'"
+            "${BASH_PROGRAM}" -lc "FFMPEG_SOURCE_DIR_MSYS='${_source_dir_msys}' FFMPEG_SOURCE_DIR_WIN='${_source_dir_win}' FFMPEG_BUILD_DIR_MSYS='${_build_dir_msys}' FFMPEG_BUILD_DIR_WIN='${_build_dir_win}' perl -0pi -e 'my $source_dir_msys = \$ENV{FFMPEG_SOURCE_DIR_MSYS}; my $source_dir_win = \$ENV{FFMPEG_SOURCE_DIR_WIN}; my $build_dir_msys = \$ENV{FFMPEG_BUILD_DIR_MSYS}; my $build_dir_win = \$ENV{FFMPEG_BUILD_DIR_WIN}; if (\$ARGV =~ /config\\.mak\z/) { (my $source_dir_make = $source_dir_win) =~ s{([\\\\\\s#\$])}{\\\\$1}g; (my $build_dir_make = $build_dir_win) =~ s{([\\\\\\s#\$])}{\\\\$1}g; s{\\Q$source_dir_msys\\E}{$source_dir_make}g; s{\\Q$build_dir_msys\\E}{$build_dir_make}g; s{^SRC_PATH\\s*:?=\\s*.*$}{SRC_PATH=$source_dir_make}mg; } else { (my $source_dir_sh = $source_dir_win) =~ s{\\x27}{\"\\x27\\\\\\x27\\x27\"}ge; (my $build_dir_sh = $build_dir_win) =~ s{\\x27}{\"\\x27\\\\\\x27\\x27\"}ge; s{\\Q$source_dir_msys\\E}{$source_dir_sh}g; s{\\Q$build_dir_msys\\E}{$build_dir_sh}g; s{^SRC_PATH\\s*:?=\\s*.*$}{\"SRC_PATH=\\x27$source_dir_sh\\x27\"}mge; } s{^(AR|AR_CMD)=llvm-lib}{$1=llvm-ar}mg' '${_build_dir_win}/ffbuild/config.mak' '${_build_dir_win}/ffbuild/config.sh'"
         COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
             "${BASH_PROGRAM}" -lc "export PATH='${_clangcl_tool_dir_msys}:${_linker_tool_dir_msys}:${_ar_tool_dir_msys}':$PATH && '${MAKE_PROGRAM}' -j${_ffmpeg_jobs}"
         COMMAND "${CMAKE_COMMAND}" -E env "MSYS2_ARG_CONV_EXCL=*"
