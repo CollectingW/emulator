@@ -298,7 +298,11 @@ if [ -n "${_citron_has_amd}" ]; then
         ,,) export RADV_PERFTEST=video_decode ;;
         *) export RADV_PERFTEST="${RADV_PERFTEST},video_decode" ;;
     esac
-    export RADV_EXPERIMENTAL="${RADV_EXPERIMENTAL:+${RADV_EXPERIMENTAL},}video_decode"
+    case ",${RADV_EXPERIMENTAL:-}," in
+        *,video_decode,*) ;;
+        ,,) export RADV_EXPERIMENTAL=video_decode ;;
+        *) export RADV_EXPERIMENTAL="${RADV_EXPERIMENTAL},video_decode" ;;
+    esac
 fi
 
 if [ -z "${VDPAU_DRIVER:-}" ] && [ -n "${_citron_has_amd}" ] \

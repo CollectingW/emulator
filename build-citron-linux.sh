@@ -169,8 +169,11 @@ fi
 if [[ "${_inside_arch}" != 1 && "${_container_mode}" != native ]]; then
     _container_runtime="${CITRON_CONTAINER_RUNTIME:-}"
     if [[ -z "${_container_runtime}" ]]; then
-        command -v docker >/dev/null 2>&1 && _container_runtime=docker
-        command -v podman >/dev/null 2>&1 && _container_runtime=${_container_runtime:-podman}
+        if command -v docker >/dev/null 2>&1; then
+            _container_runtime=docker
+        elif command -v podman >/dev/null 2>&1; then
+            _container_runtime=podman
+        fi
     fi
     if [[ -z "${_container_runtime}" ]]; then
         if [[ "${_container_mode}" = container ]]; then
@@ -182,7 +185,9 @@ if [[ "${_inside_arch}" != 1 && "${_container_mode}" != native ]]; then
         _container_image="${CITRON_ARCH_IMAGE:-ghcr.io/pkgforge-dev/archlinux@sha256:f6fc7e14b0612a355d7ab50efb3cc40010ba28e4766860bd238d313b308f190b}"
         _container_env=( -e CITRON_IN_ARCH_CONTAINER=1 )
         for _name in CLANG_VERSION BUILD_ROOT JOBS LTO_MODE PGO_MODE UNITY_BUILD DEVEL CPM_SOURCE_CACHE; do
-            [[ -z "${!_name+x}" ]] && continue
+            if [[ -z "${!_name+x}" ]]; then
+                continue
+            fi
             if [[ "${_name}" = BUILD_ROOT || "${_name}" = CPM_SOURCE_CACHE ]]; then
                 _container_path="${!_name}"
                 if [[ "${_container_path}" = "${SCRIPT_DIR}" || "${_container_path}" = "${SCRIPT_DIR}"/* ]]; then
@@ -631,9 +636,12 @@ _setup_pacman() {
         local debloated_helper debloated_helper_sha256
         debloated_helper_sha256="9eec275b3bb8cb24a7d6743b0ba1cc612d372f172d700d6680f193a9e1ab08a9"
         debloated_helper="$(mktemp)"
-        curl -fL --retry 30 \
+        if ! curl -fL --retry 30 --connect-timeout 30 --max-time 300 \
             "https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/e9414c02f713359b551bcfa3832576d2992b13da/useful-tools/get-debloated-pkgs.sh" \
-            -o "${debloated_helper}"
+            -o "${debloated_helper}"; then
+            rm -f "${debloated_helper}"
+            error "failed to download pkgforge debloated package helper"
+        fi
         if ! printf '%s  %s\n' "${debloated_helper_sha256}" "${debloated_helper}" | sha256sum --check --status; then
             rm -f "${debloated_helper}"
             error "pkgforge debloated package helper checksum mismatch"
