@@ -359,6 +359,7 @@ if (CITRON_USE_EXTERNAL_SDL2 AND NOT TARGET SDL2::SDL2)
             "SDL_STATIC ON"
             "SDL_TEST OFF"
             "SDL_FORCE_STATIC_VCRT OFF"
+            "SDL_HIDAPI_LIBUSB ON"
     )
 endif()
 
