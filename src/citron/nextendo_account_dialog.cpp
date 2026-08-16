@@ -59,7 +59,7 @@
 #include "citron/nextendo_account_dialog.h"
 #include "citron/nextendo_account_page_p.h"
 #include "citron/nextendo_avatar_cache.h"
-#include "citron/nextendo_compatible_titles.h"
+#include "common/nextendo_compatible_titles.h"
 #include "citron/nextendo_controller.h"
 #include "citron/nextendo_friend_delegate.h"
 #include "citron/nextendo_history_delegate.h"

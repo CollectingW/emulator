@@ -14,7 +14,7 @@
 
 #include <fmt/format.h>
 
-#include "citron/nextendo_compatible_titles.h"
+#include "common/nextendo_compatible_titles.h"
 #include "common/logging.h"
 #include "common/nextendo_account.h"
 #include "core/core.h"

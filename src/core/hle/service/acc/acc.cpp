@@ -18,6 +18,7 @@
 #include "common/hex_util.h"
 #include "common/logging.h"
 #include "common/nextendo_account.h"
+#include "common/nextendo_compatible_titles.h"
 #include "common/settings.h"
 #include <ranges>
 #include "common/stb.h"
@@ -1033,22 +1034,52 @@ public:
 
 private:
     u64 GetEffectivePid() const {
-        if (const u64 linked = Common::NextendoAccount::GetPid(); linked != 0) {
-            return linked;
+        const u64 raw_pid = []() -> u64 {
+            if (const u64 linked = Common::NextendoAccount::GetPid(); linked != 0) {
+                return linked;
+            }
+            std::string pid_setting = Settings::values.nextendo_pid.GetValue();
+            if (!pid_setting.empty()) {
+                try {
+                    return std::stoull(pid_setting);
+                } catch (...) {}
+            }
+            const char* pid_env = std::getenv("NEXTENDO_PID");
+            if (pid_env && *pid_env) {
+                try {
+                    return std::stoull(pid_env);
+                } catch (...) {}
+            }
+            return 0;
+        }();
+
+        if (raw_pid == 0) {
+            return 0xcafe;
         }
-        std::string pid_setting = Settings::values.nextendo_pid.GetValue();
-        if (!pid_setting.empty()) {
-            try {
-                return std::stoull(pid_setting);
-            } catch (...) {}
+
+        // [Nextendo] Version gate: refuse to present a real PID for a title whose installed
+        // version doesn't match what Nextendo's servers require, reusing the exact same
+        // server-side refusal as "no account linked" (0xcafe is not a real registered
+        // account, so the gated server rejects it) rather than inventing a new failure mode.
+        // Keeps outdated clients off the servers entirely -- reduces load from clients that
+        // can't speak the wire format the server expects, and keeps the playerbase from
+        // fragmenting across versions.
+        const u64 program_id = system.GetApplicationProcessProgramID();
+        if (Nextendo::CompatibleTitles::Table().contains(program_id)) {
+            const FileSys::PatchManager pm{program_id, system.GetFileSystemController(),
+                                           system.GetContentProvider()};
+            const auto metadata = pm.GetControlMetadata();
+            const std::string installed_version =
+                metadata.first != nullptr ? metadata.first->GetVersionString() : std::string{};
+            if (!Nextendo::CompatibleTitles::IsVersionOk(program_id, installed_version)) {
+                LOG_WARNING(Service_ACC,
+                            "[Nextendo] Refusing online PID: installed version doesn't match "
+                            "what this title requires for online play");
+                return 0xcafe;
+            }
         }
-        const char* pid_env = std::getenv("NEXTENDO_PID");
-        if (pid_env && *pid_env) {
-            try {
-                return std::stoull(pid_env);
-            } catch (...) {}
-        }
-        return 0xcafe;
+
+        return raw_pid;
     }
 
     void CheckAvailability(HLERequestContext& ctx) {

@@ -25,7 +25,7 @@
 #include "citron/uisettings.h"
 #include "citron/theme.h"
 #include "citron/custom_metadata.h"
-#include "citron/nextendo_compatible_titles.h"
+#include "common/nextendo_compatible_titles.h"
 #include "citron/nextendo_ldn_counts.h"
 #include "citron/nextendo_online_counts.h"
 #include "citron/util/image_cache.h"

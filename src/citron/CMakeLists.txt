@@ -269,7 +269,6 @@ add_executable(citron
     nextendo_controller.h
     nextendo_friend_delegate.cpp
     nextendo_friend_delegate.h
-    nextendo_compatible_titles.h
     nextendo_history_delegate.cpp
     nextendo_history_delegate.h
     nextendo_ldn_counts.cpp

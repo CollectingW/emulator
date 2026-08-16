@@ -20,7 +20,7 @@
 #include "core/file_sys/patch_manager.h"
 #include "core/file_sys/vfs/vfs.h"
 #include "core/hle/service/acc/profile_manager.h"
-#include "citron/nextendo_compatible_titles.h"
+#include "common/nextendo_compatible_titles.h"
 #include "citron/nextendo_controller.h"
 #include "citron/nextendo_save_sync.h"
 
