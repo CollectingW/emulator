@@ -1200,6 +1200,8 @@ add_library(core STATIC
     loader/nax.h
     loader/nca.cpp
     loader/nca.h
+    loader/nextendo_s3_patches.cpp
+    loader/nextendo_s3_patches.h
     loader/nro.cpp
     loader/nro.h
     loader/nso.cpp
