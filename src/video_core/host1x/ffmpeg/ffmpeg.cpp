@@ -309,7 +309,12 @@ std::unique_ptr<Frame> DecoderContext::ReceiveFrame(bool* out_is_interlaced) {
         // After transfer, if the output came out as planar YUV (e.g. yuv420p from
         // Vulkan) rather than NV12, copy the frame props so downstream code has
         // correct width/height/pts regardless of which sw format was chosen.
-        av_frame_copy_props(dst_frame->GetFrame(), intermediate_frame.GetFrame());
+        if (const int ret =
+                av_frame_copy_props(dst_frame->GetFrame(), intermediate_frame.GetFrame());
+            ret < 0) {
+            LOG_ERROR(HW_GPU, "av_frame_copy_props error: {}", AVError(ret));
+            return {};
+        }
     } else {
         // Otherwise, decode the frame as normal.
         if (!ReceiveImpl(dst_frame->GetFrame())) {
