@@ -2660,7 +2660,8 @@ void NextendoAccountDialog::RefreshPlayers() {
                         player.pid, PlayerDisplayName(player),
                         QString::fromStdString(player.friend_code), player.is_me ? 0 : 2,
                         controller ? controller->ResolveGameName(player.title_id) : QString{},
-                        QString::fromStdString(avatars[player.pid]), false, tr("Add")));
+                        QString::fromStdString(avatars[player.pid]), false, tr("Add"),
+                        player.is_me));
                 }
                 for (const auto& player : recent) {
                     if (player.known) {
@@ -2700,6 +2701,13 @@ void NextendoAccountDialog::OnPlayersViewClicked(const QModelIndex& index) {
     }
     const std::string friend_code = index.data(NextendoFriendItem::FriendCodeRole).toString().toStdString();
     if (friend_code.empty()) {
+        status->setText(tr("This player doesn't have a friend code available."));
+        return;
+    }
+    const QString name = index.data(NextendoFriendItem::NameRole).toString();
+    const std::string avatar_b64 = index.data(NextendoFriendItem::AvatarB64Role).toString().toStdString();
+    if (!ConfirmAction(tr("Add Friend"), tr("Send %1 a friend request?").arg(name), tr("Yes"),
+                       tr("No"), avatar_b64)) {
         return;
     }
     RunAsync([friend_code] { return WebService::NextendoApi::AddFriendByCode(friend_code); },
