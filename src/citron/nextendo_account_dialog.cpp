@@ -2691,12 +2691,16 @@ void NextendoAccountDialog::OnPlayersViewClicked(const QModelIndex& index) {
 
     const QRect cell_rect = view->visualRect(index);
     const QPoint pos = view->viewport()->mapFromGlobal(QCursor::pos());
-    if (delegate->HitTestActions(cell_rect, pos, false) != NextendoFriendDelegate::ActionHit::Primary) {
+    if (delegate->HitTestActions(cell_rect, pos, false) == NextendoFriendDelegate::ActionHit::None) {
         return;
     }
 
     const u64 pid = SelectedPid(index);
-    if (pid == 0 || pid == Common::NextendoAccount::GetPid() || !known_player_pids.contains(pid)) {
+    if (pid == 0 || pid == Common::NextendoAccount::GetPid()) {
+        return;
+    }
+    if (!known_player_pids.contains(pid)) {
+        status->setText(tr("This player isn't a known Nextendo account."));
         return;
     }
     const std::string friend_code = index.data(NextendoFriendItem::FriendCodeRole).toString().toStdString();
