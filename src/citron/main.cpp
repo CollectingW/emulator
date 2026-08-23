@@ -2051,7 +2051,7 @@ void GMainWindow::ConnectMenuEvents() {
         if (kind != NextendoToast::Kind::Request || !Common::NextendoAccount::IsLinked()) {
             return;
         }
-        NextendoAccountDialog(nextendo_controller, *system, this, NextendoAccountDialog::kRequestsPage)
+        NextendoAccountDialog(nextendo_controller, *system, this, NextendoAccountDialog::kFriendsPage)
             .exec();
     });
     connect(ui->action_Nextendo_Population, &QAction::triggered, this,
